@@ -63,6 +63,14 @@ impl WebViews {
         {
             return Ok(Self::new(crate::backend::web::WebBackend::new(), config));
         }
+        // Linux prefers the nested Wayland compositor: it is the only inline
+        // path with clip + overlay parity on Wayland.
+        #[cfg(all(target_os = "linux", feature = "nested"))]
+        {
+            if let Ok(backend) = crate::backend::nested::NestedBackend::new() {
+                return Ok(Self::new(backend, config));
+            }
+        }
         #[cfg(all(not(target_arch = "wasm32"), feature = "wry"))]
         {
             match crate::backend::native::NativeBackend::new() {
@@ -247,6 +255,35 @@ impl WebViews {
                 key: surface.key,
             });
         }
+    }
+
+    /// The latest decoded frame of `key`'s surface for the app to paint, when
+    /// the backend composes itself (the nested Linux compositor). `None` for
+    /// child-view backends, which composite through the platform.
+    pub fn frame_image(&mut self, key: u64) -> Option<crate::spec::SurfaceFrame> {
+        let surface = self.surfaces.iter().find(|surface| surface.key == key)?;
+        self.backend.frame_image(surface.id)
+    }
+
+    /// Forwards one input event to `key`'s surface. A no-op unless the surface
+    /// holds keyboard focus (or the event is a pointer event, which carries
+    /// its own focus by position).
+    pub fn input(&mut self, key: u64, event: crate::spec::WebInputEvent) {
+        let Some(surface) = self.surfaces.iter().find(|surface| surface.key == key) else {
+            return;
+        };
+        if !surface.focused && !matches!(event, crate::spec::WebInputEvent::PointerButton { .. }) {
+            return;
+        }
+        self.backend.input(surface.id, event);
+    }
+
+    /// Whether `key`'s surface owns keyboard focus.
+    pub fn is_focused(&self, key: u64) -> bool {
+        self.surfaces
+            .iter()
+            .find(|surface| surface.key == key)
+            .is_some_and(|surface| surface.focused)
     }
 
     /// Routes keyboard focus into (or out of) `key`'s surface.

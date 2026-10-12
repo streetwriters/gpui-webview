@@ -71,7 +71,7 @@ pub use host::{ReadSeek, SchemeLoader, UnsupportedBackend, WebViewBackend};
 pub use manager::WebViews;
 pub use spec::{
     Config, Error, Navigation, OverlayBehavior, Placement, Policy, Presentation, Result, Source,
-    Storage, SurfaceId, SurfaceSpec, WebViewEvent,
+    Storage, SurfaceFrame, SurfaceId, SurfaceSpec, WebInputEvent, WebViewEvent,
 };
 
 /// The crate's version, for host diagnostics.

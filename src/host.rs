@@ -83,6 +83,25 @@ pub trait WebViewBackend: 'static {
     /// Tears the surface down. Must be safe to call twice.
     fn destroy(&mut self, id: SurfaceId);
 
+    /// The latest decoded frame for a self-compositing backend, so the app can
+    /// paint it (the nested Linux compositor). `None` for backends whose
+    /// platform layer composites the surface itself, and for a surface that
+    /// has not committed a buffer yet.
+    fn frame_image(&mut self, _id: SurfaceId) -> Option<crate::spec::SurfaceFrame> {
+        None
+    }
+
+    /// Forwards one input event to a surface. Only self-compositing backends
+    /// consume it; child-view backends ignore it (their platform view already
+    /// got the event).
+    fn input(&mut self, _id: SurfaceId, _event: crate::spec::WebInputEvent) {}
+
+    /// Whether the backend currently routes keyboard focus into the surface.
+    fn is_focused(&self, _id: SurfaceId) -> bool {
+        let _ = _id;
+        false
+    }
+
     /// Sets the streaming source for `Source::Local`. Called once at setup,
     /// before any `create`.
     fn set_scheme_loader(&mut self, _loader: std::sync::Arc<dyn SchemeLoader>) {}

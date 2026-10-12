@@ -11,7 +11,7 @@ use gpui_kit::Window;
 
 use crate::host::WebViewBackend;
 use crate::spec::{
-    Error, Placement, Presentation, Result, SurfaceId, SurfaceSpec, WebViewEvent,
+    Error, Placement, Presentation, Result, SurfaceId, SurfaceSpec, WebInputEvent, WebViewEvent,
 };
 
 #[derive(Default)]
@@ -19,6 +19,9 @@ struct MockState {
     attached: bool,
     created: Vec<SurfaceId>,
     created_specs: Vec<(SurfaceId, SurfaceSpec)>,
+    inputs: Vec<(SurfaceId, WebInputEvent)>,
+    focused: std::collections::HashSet<SurfaceId>,
+    frame_image: Option<crate::spec::SurfaceFrame>,
     navigated: Vec<(SurfaceId, SurfaceSpec)>,
     destroyed: Vec<SurfaceId>,
     placed: Vec<(SurfaceId, Placement)>,
@@ -70,6 +73,12 @@ impl MockBackend {
         read(&state)
     }
 
+    /// Makes `frame_image` return this frame for every surface (the nested
+    /// compositor's shm path, without a compositor).
+    pub fn with_frame_image(self, frame: crate::spec::SurfaceFrame) -> Self {
+        self.with(|state| state.frame_image = Some(frame))
+    }
+
     /// Queues a backend-originated event; the manager drains it on `frame`.
     pub fn send(&self, event: WebViewEvent) {
         if let Ok(mut state) = self.state.lock() {
@@ -109,6 +118,11 @@ impl MockBackend {
 
     pub fn presented(&self) -> Vec<(SurfaceId, Presentation)> {
         self.read(|state| state.presented.clone())
+    }
+
+    /// Every input event forwarded through the manager, in order.
+    pub fn inputs(&self) -> Vec<(SurfaceId, WebInputEvent)> {
+        self.read(|state| state.inputs.clone())
     }
 }
 
@@ -156,7 +170,26 @@ impl WebViewBackend for MockBackend {
     fn set_focus(&mut self, id: SurfaceId, focused: bool) {
         if let Ok(mut state) = self.state.lock() {
             state.focus.push((id, focused));
+            if focused {
+                state.focused.insert(id);
+            } else {
+                state.focused.remove(&id);
+            }
         }
+    }
+
+    fn frame_image(&mut self, _id: SurfaceId) -> Option<crate::spec::SurfaceFrame> {
+        self.read(|state| state.frame_image.clone())
+    }
+
+    fn input(&mut self, id: SurfaceId, event: WebInputEvent) {
+        if let Ok(mut state) = self.state.lock() {
+            state.inputs.push((id, event));
+        }
+    }
+
+    fn is_focused(&self, id: SurfaceId) -> bool {
+        self.read(|state| state.focused.contains(&id))
     }
 
     fn present(&mut self, id: SurfaceId, mode: Presentation) -> Result<()> {

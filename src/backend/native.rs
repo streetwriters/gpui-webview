@@ -75,6 +75,7 @@ impl NativeBackend {
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn empty() -> Self {
         Self {
             #[cfg(target_os = "macos")]

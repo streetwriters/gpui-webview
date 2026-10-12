@@ -28,11 +28,9 @@ wry = [
     "dep:objc2-foundation",
     "dep:objc2-web-kit",
 ]
-# Linux only: the in-process nested Wayland compositor. Scaffolded; the
-# compositor is built on **smithay** (user decision, 2026-10-12) — see
-# `backend/nested.rs` and EMBEDS.md §10.3. Returns `Unsupported` until the
-# compositor lands, so enabling it is safe.
-nested = ["wry"]
+# Linux only: the in-process nested Wayland compositor (smithay). See
+# `backend/nested.rs` and EMBEDS.md §10.3.
+nested = ["wry", "dep:smithay", "dep:gtk", "dep:webkit2gtk", "dep:image"]
 # Optional fast paths; every backend must work without them (EMBEDS.md §14).
 dma-buf = []
 wayland-surface = []
@@ -82,6 +80,22 @@ objc2 = { version = "0.6", optional = true }
 objc2-app-kit = { version = "0.3", optional = true, features = ["std", "NSView"] }
 objc2-foundation = { version = "0.3", optional = true, features = ["std", "NSGeometry"] }
 objc2-web-kit = { version = "0.3", optional = true, features = ["std", "WKWebView", "WKWebViewConfiguration", "WKWebpagePreferences"] }
+
+# Linux native surface (EMBEDS.md §10.3): an in-process nested Wayland
+# compositor built on **smithay** (user decision, 2026-10-12). GTK/WebKitGTK
+# (through wry) connects to a private socket this process serves; the committed
+# `wl_shm` buffers become GPUI images the app paints.
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay = { version = "0.7", optional = true, default-features = false, features = [
+    "wayland_frontend",
+    "desktop",
+] }
+gtk = { version = "0.18", optional = true }
+# WebKitGTK's settings (the script switch); pinned to wry's own version so the
+# `WebView` type is the same crate.
+webkit2gtk = { version = "=2.0.2", optional = true, features = ["v2_38"] }
+# The committed `wl_shm` buffers become GPUI frame images.
+image = { version = "0.25", default-features = false, optional = true }
 
 [dev-dependencies]
 gpui-kit = { version = "0.6.6", default-features = false, features = ["test-support"] }

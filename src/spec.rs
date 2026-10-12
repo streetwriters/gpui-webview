@@ -136,6 +136,11 @@ pub struct SurfaceSpec {
     pub policy: Policy,
     /// The a11y label / window title.
     pub title: SharedString,
+    /// The initial logical size in pixels (the block's measured size). The
+    /// nested Linux compositor configures its client to exactly this, so the
+    /// page's layout matches the poster's; child-view backends size the view
+    /// from `Placement` instead.
+    pub size: (u32, u32),
 }
 
 impl SurfaceSpec {
@@ -144,7 +149,15 @@ impl SurfaceSpec {
             source,
             policy,
             title: title.into(),
+            size: (1, 1),
         }
+    }
+
+    /// Sets the initial logical size (builder form, so existing call sites
+    /// stay readable).
+    pub fn with_size(mut self, width: u32, height: u32) -> Self {
+        self.size = (width.max(1), height.max(1));
+        self
     }
 }
 
@@ -240,6 +253,58 @@ pub enum Error {
     Platform(String),
     /// The content failed to load.
     Load(String),
+}
+
+/// A decoded frame a **self-compositing** backend asks the app to paint — the
+/// nested Linux compositor's `wl_shm` path. Child-view backends (macOS, the
+/// wasm iframe) composite through the platform and return `None`.
+#[derive(Clone)]
+pub struct SurfaceFrame {
+    /// The committed pixels, in GPUI's BGRA `RenderImage` form.
+    pub image: std::sync::Arc<gpui_kit::RenderImage>,
+    /// The committed logical size (buffer size divided by the output scale),
+    /// for placement maths.
+    pub size: (u32, u32),
+}
+
+impl std::fmt::Debug for SurfaceFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SurfaceFrame")
+            .field("size", &self.size)
+            .field("image", &"<image>")
+            .finish()
+    }
+}
+
+/// One input event forwarded to a live surface (EMBEDS.md §10.3: the nested
+/// compositor synthesizes `wl_seat` events from the app's own input). Only
+/// self-compositing backends consume these; native child views and DOM
+/// iframes already receive the platform's events themselves.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebInputEvent {
+    /// Pointer moved, in surface-local logical pixels.
+    PointerMotion { x: f64, y: f64 },
+    /// A pointer button press/release. `button` is the Linux input code
+    /// (`BTN_LEFT` = 0x110, …).
+    PointerButton {
+        x: f64,
+        y: f64,
+        button: u32,
+        pressed: bool,
+    },
+    /// A scroll axis update at `(x, y)` surface-local.
+    PointerAxis {
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
+    },
+    /// A key press/release, in GPUI's own keystroke form. The backend maps it
+    /// to the keycodes of the keymap it sent to clients.
+    Key {
+        keystroke: gpui_kit::Keystroke,
+        pressed: bool,
+    },
 }
 
 /// What the manager/backends report back to the app (EMBEDS.md §8), drained in
