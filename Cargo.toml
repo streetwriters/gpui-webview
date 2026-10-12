@@ -97,5 +97,15 @@ webkit2gtk = { version = "=2.0.2", optional = true, features = ["v2_38"] }
 # The committed `wl_shm` buffers become GPUI frame images.
 image = { version = "0.25", default-features = false, optional = true }
 
+# Headless end-to-end check of the nested compositor: starts the private
+# compositor, lets GTK/WebKitGTK render into it and asserts a frame comes back
+# with the configured size and real pixels. `harness = false` so it runs on the
+# main thread (GTK requirement). Needs GTK3 + WebKitGTK 4.1 at runtime.
+[[test]]
+name = "nested_e2e"
+path = "tests/nested_e2e.rs"
+harness = false
+required-features = ["nested"]
+
 [dev-dependencies]
 gpui-kit = { version = "0.6.6", default-features = false, features = ["test-support"] }

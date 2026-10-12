@@ -53,15 +53,18 @@ platform-independent core should depend on.
   verified; the manual GUI checklist (below) is still required.
 - **wasm (`web`)**: implemented. Compile verified; the per-frame placement and
   z-index assertions live in the host's page tests.
-- **Linux (`nested`)**: implemented. A private Wayland socket served by this
-  process (smithay); each surface's GTK/WebKitGTK window is an `xdg_toplevel`
-  on it, its `wl_shm` commits are copied into a `SurfaceFrame` the app paints,
-  and GPUI input is forwarded as `wl_seat` events. XPixmap/X11 tiers (`§10.4`)
-  are not needed for the compositor path. Compile-verified on Linux (Docker);
-  runtime verification on a Linux desktop is the remaining gate. Limits:
-  `wl_shm` only (`linux-dmabuf` needs the `dma-buf` renderer feature), no
-  `wl_data_device` clipboard bridge yet, popups arrive unplaced, and key
-  releases are synthesized per keystroke.
+- **Linux (`nested`)**: implemented and **runtime-verified headless**. The
+  compositor runs on its own thread (a same-thread design deadlocks in
+  `gtk_init`); each surface's GTK/WebKitGTK window is an `xdg_toplevel`
+  configured to the block's size, its `wl_shm` commits are copied into a
+  `SurfaceFrame` the app paints (cropped to `set_window_geometry`, so
+  decoration shadows never reach the block), and GPUI input is forwarded as
+  `wl_seat` events. `cargo test -p gpui-webview --features nested` runs a real
+  end-to-end test (`tests/nested_e2e.rs`) that needs no display; it passes in
+  a bare container. XPixmap/X11 tiers (`§10.4`) are not needed for the
+  compositor path. Limits: `wl_shm` only (`linux-dmabuf` needs the `dma-buf`
+  renderer feature), no `wl_data_device` clipboard bridge yet, popups arrive
+  unplaced, and key releases are synthesized per keystroke.
 - **Windows**: not started.
 - **GPUI patches** (`dma-buf` external textures, `wayland-surface`): required by
   the Linux fast paths only; documented in EMBEDS.md §14. Every backend must
