@@ -15,6 +15,7 @@ use smithay::backend::allocator::Fourcc;
 #[cfg(dmabuf)]
 use smithay::backend::allocator::Modifier;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Logical;
@@ -184,18 +185,50 @@ impl NestedState {
         }
     }
 
-    /// Releases pending frame callbacks so the client can reuse its buffer (T21: on commit, not present).
+    /// Takes the frame callbacks a commit brought and answers them now
+    /// (commit-time pacing: popups and the `GPUI_WEBVIEW_COMMIT_CALLBACKS`
+    /// switch; the toplevel path parks them via [`Self::queue_frame_callbacks`]).
     pub(super) fn fire_frame_callbacks(&mut self, surface: &WlSurface) {
-        let callbacks: Vec<smithay::reexports::wayland_server::protocol::wl_callback::WlCallback> =
-            smithay::wayland::compositor::with_states(surface, |states| {
-                states
-                    .cached_state
-                    .get::<SurfaceAttributes>()
-                    .current()
-                    .frame_callbacks
-                    .drain(..)
-                    .collect()
-            });
+        let callbacks = self.take_frame_callbacks(surface);
+        self.finish_frame_callbacks(callbacks);
+    }
+
+    /// Parks the callbacks a commit brought until the app reports the surface
+    /// painted (present pacing): the client's next frame waits for the next
+    /// paint, so the page animates at the app's rate.
+    pub(super) fn queue_frame_callbacks(&mut self, id: SurfaceId, surface: &WlSurface) {
+        let callbacks = self.take_frame_callbacks(surface);
+        if !callbacks.is_empty() {
+            self.pending_frame_callbacks
+                .entry(id)
+                .or_default()
+                .extend(callbacks);
+        }
+    }
+
+    /// Releases the callbacks parked for `id`; `WebViews::presented` got here.
+    pub(super) fn release_frame_callbacks(&mut self, id: SurfaceId) {
+        let Some(callbacks) = self.pending_frame_callbacks.remove(&id) else {
+            return;
+        };
+        self.finish_frame_callbacks(callbacks);
+    }
+
+    /// Drains the surface's pending frame callbacks (they arrive with a commit).
+    fn take_frame_callbacks(&mut self, surface: &WlSurface) -> Vec<WlCallback> {
+        smithay::wayland::compositor::with_states(surface, |states| {
+            states
+                .cached_state
+                .get::<SurfaceAttributes>()
+                .current()
+                .frame_callbacks
+                .drain(..)
+                .collect()
+        })
+    }
+
+    /// Times and answers a batch of frame callbacks.
+    fn finish_frame_callbacks(&mut self, callbacks: Vec<WlCallback>) {
         let time = self.now_ms();
         if !callbacks.is_empty() {
             debug_log2!("commit: fired {} frame callback(s)", callbacks.len());

@@ -28,6 +28,7 @@ struct MockState {
     presented: Vec<(SurfaceId, Presentation)>,
     events: Vec<WebViewEvent>,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
+    presented_surfaces: Vec<SurfaceId>,
     supports_local: bool,
     fail_attach: bool,
     fail_create: bool,
@@ -135,6 +136,11 @@ impl MockBackend {
         self.read(|state| state.presented.clone())
     }
 
+    /// Every "the app painted this surface" report, in order (present pacing).
+    pub fn presented_surfaces(&self) -> Vec<SurfaceId> {
+        self.read(|state| state.presented_surfaces.clone())
+    }
+
     /// Every input event forwarded through the manager, in order.
     pub fn inputs(&self) -> Vec<(SurfaceId, WebInputEvent)> {
         self.read(|state| state.inputs.clone())
@@ -195,6 +201,12 @@ impl WebViewBackend for MockBackend {
     fn set_waker(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
         if let Ok(mut state) = self.state.lock() {
             state.waker = Some(waker);
+        }
+    }
+
+    fn surface_presented(&mut self, id: SurfaceId) {
+        if let Ok(mut state) = self.state.lock() {
+            state.presented_surfaces.push(id);
         }
     }
 

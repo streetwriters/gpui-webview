@@ -50,10 +50,9 @@ mod linux {
     }
 
     impl Harness {
-        /// One paint pass plus the main-context pump it drives.
+        /// One paint pass as the app does it: place, pump, report presented.
         fn pump(&mut self) {
-            self.webviews.frame(&self.live, self.viewport, &[]);
-            self.webviews.pump();
+            paint_pass(&mut self.webviews, &self.live, self.viewport);
         }
         /// The current frame's pixels, through the frame's own transport.
         fn pixels(&mut self) -> Option<Vec<u8>> {
@@ -372,8 +371,7 @@ mod linux {
             let until = Instant::now() + Duration::from_secs(10);
             let mut resized = false;
             while Instant::now() < until {
-                self.webviews.frame(&small_live, small_viewport, &[]);
-                self.webviews.pump();
+                paint_pass(&mut self.webviews, &small_live, small_viewport);
                 if self
                     .webviews
                     .frame_image(0)
@@ -515,8 +513,7 @@ mod linux {
         #[allow(unused_mut, unused_variables)]
         let mut self_checked = false;
         while started.elapsed() < timeout {
-            webviews.frame(live, viewport, &[]);
-            webviews.pump();
+            paint_pass(webviews, live, viewport);
             if let Some(frame) = webviews.frame_image(0) {
                 if first_commit.is_none() {
                     first_commit = Some(started.elapsed());
@@ -972,8 +969,7 @@ mod linux {
         let mut last: Option<gpui_webview::SurfaceFrame> = None;
         let mut seen = 0;
         loop {
-            webviews.frame(live, viewport, &[]);
-            webviews.pump();
+            paint_pass(webviews, live, viewport);
             if let Some(frame) = webviews.frame_image(0) {
                 let changed = last.as_ref().is_none_or(|last| !frame.same_as(last));
                 if changed {
@@ -991,6 +987,18 @@ mod linux {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+    /// One paint pass as the app does it: place the surface, pump the main
+    /// context, then report it painted (which releases the frame callbacks a
+    /// commit parked — present pacing).
+    fn paint_pass(
+        webviews: &mut WebViews,
+        live: &[(u64, Placement)],
+        viewport: Bounds<gpui_kit::Pixels>,
+    ) {
+        webviews.frame(live, viewport, &[]);
+        webviews.pump();
+        webviews.presented(0);
     }
     /// A whole click (motion, press, release) with `button` at page-local
     /// `(x, y)`.
@@ -1024,8 +1032,7 @@ mod linux {
     ) -> Vec<gpui_webview::PopupFrame> {
         let until = Instant::now() + Duration::from_secs(10);
         loop {
-            webviews.frame(live, viewport, &[]);
-            webviews.pump();
+            paint_pass(webviews, live, viewport);
             let popups = webviews.popup_frames(0);
             if popups.is_empty() != want || Instant::now() >= until {
                 return popups;

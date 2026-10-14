@@ -492,6 +492,14 @@ impl WebViews {
         self.backend.set_waker(waker);
     }
 
+    /// Reports that `key`'s latest frame was painted (see
+    /// [`WebViewBackend::surface_presented`]); a no-op when the key is gone.
+    pub fn presented(&mut self, key: u64) {
+        if let Some(surface) = self.surfaces.iter().find(|surface| surface.key == key) {
+            self.backend.surface_presented(surface.id);
+        }
+    }
+
     /// Moves backend events into the caller-facing queue; a backend `Closed` is
     /// translated to the caller's key and tears the surface down.
     fn drain_backend_events(&mut self) {

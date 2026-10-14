@@ -96,6 +96,11 @@ pub trait WebViewBackend: 'static {
     /// waker's job; calls can arrive on any thread. Default: no-op.
     fn set_waker(&mut self, _waker: std::sync::Arc<dyn Fn() + Send + Sync>) {}
 
+    /// The app painted `id`'s latest frame. Self-compositing backends release
+    /// the surface's parked frame callbacks here (present pacing); an idle
+    /// app that never reports leaves the client waiting, which is the point.
+    fn surface_presented(&mut self, _id: SurfaceId) {}
+
     /// Sets the streaming source for `Source::Local` (once, before any `create`).
     fn set_scheme_loader(&mut self, _loader: std::sync::Arc<dyn SchemeLoader>) {}
 

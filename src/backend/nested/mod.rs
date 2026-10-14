@@ -65,6 +65,11 @@ pub(super) enum Command {
         id: SurfaceId,
         event: WebInputEvent,
     },
+    /// The app painted the surface: release its parked frame callbacks
+    /// (present pacing; see `GPUI_WEBVIEW_COMMIT_CALLBACKS`).
+    Presented {
+        id: SurfaceId,
+    },
     /// The renderer's importable formats, advertised as `linux-dmabuf` feedback.
     #[cfg(dmabuf)]
     DmabufFeedback(gpui_kit::DmaBufCapabilities),

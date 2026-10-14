@@ -451,6 +451,11 @@ impl WebViewBackend for NestedBackend {
         *lock(&self.shared.waker) = Some(waker);
     }
 
+    fn surface_presented(&mut self, id: SurfaceId) {
+        // Best-effort: the compositor may already be gone.
+        let _ = self.commands.send(Command::Presented { id });
+    }
+
     fn supports_local(&self) -> bool {
         false
     }

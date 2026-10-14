@@ -29,6 +29,7 @@ use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::wayland_server::Client;
 use smithay::reexports::wayland_server::Display;
 use smithay::reexports::wayland_server::ListeningSocket;
+use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::SERIAL_COUNTER;
@@ -150,6 +151,12 @@ pub struct NestedState {
     pub(super) dmabuf_formats: Vec<(u32, u64)>,
     /// A per-commit sequence for frames (repaint detection).
     pub(super) commit_sequence: u64,
+    /// Whether frame callbacks are released on present (`Command::Presented`)
+    /// instead of on commit (`GPUI_WEBVIEW_COMMIT_CALLBACKS=1` opts out).
+    pub(super) present_paced: bool,
+    /// Toplevel frame callbacks parked until the app reports the surface
+    /// painted (present pacing).
+    pub(super) pending_frame_callbacks: HashMap<SurfaceId, Vec<WlCallback>>,
     /// The held dma-buf per surface (T14).
     pub(super) held_buffers: HashMap<SurfaceId, HeldBuffer>,
     /// T10: the never-reused generation per `wl_buffer` id (the app's cache key).
@@ -185,6 +192,7 @@ impl NestedState {
     pub(super) fn forget_toplevel(&mut self, id: SurfaceId) {
         self.requested.remove(&id);
         self.release_held_buffer(id);
+        self.pending_frame_callbacks.remove(&id);
         self.content_sizes.remove(&id);
         self.dismiss_popups(id);
         let surface = self.mapped.remove(&id);
@@ -290,6 +298,10 @@ pub(super) fn compositor_main(
     shared: Arc<Shared>,
     ready: Sender<std::result::Result<(), String>>,
 ) {
+    // Phase 5 step 4: frame callbacks are released when the app reports the
+    // frame painted (present pacing). `GPUI_WEBVIEW_COMMIT_CALLBACKS=1`
+    // restores the old commit-time release, for A/B comparison.
+    let commit_paced = std::env::var_os("GPUI_WEBVIEW_COMMIT_CALLBACKS").is_some();
     let display = match Display::<NestedState>::new() {
         Ok(display) => display,
         Err(error) => {
@@ -366,6 +378,8 @@ pub(super) fn compositor_main(
         #[cfg(dmabuf)]
         dmabuf_formats: Vec::new(),
         commit_sequence: 0,
+        present_paced: !commit_paced,
+        pending_frame_callbacks: HashMap::new(),
         held_buffers: HashMap::new(),
         #[cfg(dmabuf)]
         buffer_generations: HashMap::new(),
@@ -521,6 +535,8 @@ fn apply_command(data: &mut CalloopData, command: Command) {
             }
         }
         Command::Input { id, event } => apply_input(&mut data.state, id, event),
+        // The app painted the surface: release its parked frame callbacks.
+        Command::Presented { id } => data.state.release_frame_callbacks(id),
         #[cfg(dmabuf)]
         Command::DmabufFeedback(capabilities) => {
             let handle = data.display.handle();
@@ -615,7 +631,13 @@ impl CompositorHandler for NestedState {
             CommittedBuffer::Unchanged | CommittedBuffer::Rejected => {}
         }
 
-        self.fire_frame_callbacks(surface);
+        if self.present_paced {
+            // Present pacing: the callbacks this commit brought wait until the
+            // app reports the surface painted.
+            self.queue_frame_callbacks(id, surface);
+        } else {
+            self.fire_frame_callbacks(surface);
+        }
     }
 
     fn destroyed(&mut self, surface: &WlSurface) {
