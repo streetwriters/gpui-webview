@@ -8,9 +8,11 @@ use smithay::delegate_data_device;
 #[cfg(dmabuf)]
 use smithay::delegate_dmabuf;
 use smithay::delegate_output;
+use smithay::delegate_primary_selection;
 use smithay::delegate_seat;
 use smithay::delegate_shm;
 use smithay::delegate_xdg_shell;
+use smithay::input::Seat;
 use smithay::input::SeatState;
 use smithay::input::keyboard::KeyboardHandle;
 use smithay::input::keyboard::XkbConfig;
@@ -28,6 +30,7 @@ use smithay::reexports::calloop::channel::Event as ChannelEvent;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::wayland_server::Client;
 use smithay::reexports::wayland_server::Display;
+use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::ListeningSocket;
 use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
 use smithay::reexports::wayland_server::protocol::wl_shm;
@@ -44,6 +47,8 @@ use smithay::wayland::dmabuf::DmabufGlobal;
 use smithay::wayland::dmabuf::DmabufState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::selection::data_device::DataDeviceState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionHandler;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::shell::xdg::PopupSurface;
 use smithay::wayland::shell::xdg::PositionerState;
 use smithay::wayland::shell::xdg::ToplevelSurface;
@@ -64,6 +69,8 @@ use smithay::input::SeatHandler;
 use smithay::wayland::compositor::CompositorHandler;
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::selection::SelectionSource;
+use smithay::wayland::selection::SelectionTarget;
 use smithay::wayland::selection::data_device::ClientDndGrabHandler;
 use smithay::wayland::selection::data_device::DataDeviceHandler;
 use smithay::wayland::selection::data_device::ServerDndGrabHandler;
@@ -122,6 +129,10 @@ pub struct NestedState {
     #[allow(dead_code)]
     pub(super) output_manager_state: OutputManagerState,
     pub(super) seat_state: SeatState<Self>,
+    /// The one seat; selections are set and read on it.
+    pub(super) seat: Seat<Self>,
+    /// For the selection helpers, which take the display handle.
+    pub(super) display_handle: DisplayHandle,
     pub(super) pointer: PointerHandle<Self>,
     pub(super) keyboard: KeyboardHandle<Self>,
     /// Key names to evdev codes, read from `keyboard`'s compiled keymap.
@@ -140,9 +151,13 @@ pub struct NestedState {
     /// Live popups, in map order = paint order.
     pub(super) popups: Vec<Popup>,
     pub(super) next_popup_id: u64,
-    /// T2: GTK3 binds no `wl_seat` without this global, so there is no input at all.
-    #[allow(dead_code)]
+    /// T2: GTK3 binds no `wl_seat` without this global; it also carries the
+    /// clipboard (`selection.rs`).
     pub(super) data_device_state: DataDeviceState,
+    /// The primary selection (`zwp_primary_selection_device_manager_v1`).
+    pub(super) primary_selection_state: PrimarySelectionState,
+    /// Who owns each selection (`selection.rs`).
+    pub(super) selection: super::selection::SelectionBridge,
     /// `linux-dmabuf`; global appears once the renderer's capabilities arrive.
     #[cfg(dmabuf)]
     pub(super) dmabuf_state: DmabufState,
@@ -313,6 +328,7 @@ pub(super) fn compositor_main(
     );
     let xdg_shell_state = XdgShellState::new::<NestedState>(&handle);
     let data_device_state = DataDeviceState::new::<NestedState>(&handle);
+    let primary_selection_state = PrimarySelectionState::new::<NestedState>(&handle);
     let output_manager_state = OutputManagerState::new_with_xdg_output::<NestedState>(&handle);
     let output = Output::new(
         "gpui-webview".to_string(),
@@ -347,6 +363,8 @@ pub(super) fn compositor_main(
         xdg_shell_state,
         output_manager_state,
         seat_state,
+        seat: seat.clone(),
+        display_handle: handle.clone(),
         pointer,
         keyboard,
         key_table: Default::default(),
@@ -358,6 +376,8 @@ pub(super) fn compositor_main(
         popups: Vec::new(),
         next_popup_id: 1,
         data_device_state,
+        primary_selection_state,
+        selection: Default::default(),
         #[cfg(dmabuf)]
         dmabuf_state: DmabufState::new(),
         #[cfg(dmabuf)]
@@ -428,6 +448,8 @@ pub(super) fn compositor_main(
                 if let Err(error) = data.display.dispatch_clients(&mut data.state) {
                     eprintln!("gpui-webview: dispatch failed: {error}");
                 }
+                // Before the flush, so the read requests go out with it.
+                data.state.read_page_selections();
                 let _ = data.display.flush_clients();
                 // T11: a toplevel's title arrives in the same client batch.
                 data.state.accept_pending_toplevels();
@@ -573,6 +595,9 @@ fn apply_command(data: &mut CalloopData, command: Command) {
         }
         Command::KeyboardLayout(name) => data.state.set_host_layout(&name),
         Command::OutputScale(scale) => data.state.set_output_scale(scale),
+        Command::HostSelection { selection, text } => {
+            data.state.offer_host_selection(selection, text)
+        }
         // Handled by the channel callback, which stops the loop.
         Command::Shutdown => {}
     }
@@ -585,6 +610,10 @@ impl SeatHandler for NestedState {
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seat_state
+    }
+
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        self.selection_focus(seat, focused);
     }
 }
 
@@ -678,8 +707,34 @@ impl CompositorHandler for NestedState {
 }
 
 impl SelectionHandler for NestedState {
-    // T2: the global exists so GDK binds the seat; selection is not bridged yet.
-    type SelectionUserData = ();
+    /// A server selection's text: the host's, offered to the page.
+    type SelectionUserData = Arc<String>;
+
+    fn new_selection(
+        &mut self,
+        target: SelectionTarget,
+        source: Option<SelectionSource>,
+        _seat: Seat<Self>,
+    ) {
+        self.page_selection(target, source);
+    }
+
+    fn send_selection(
+        &mut self,
+        _target: SelectionTarget,
+        mime_type: String,
+        fd: std::os::fd::OwnedFd,
+        _seat: Seat<Self>,
+        text: &Arc<String>,
+    ) {
+        super::selection::serve_host_selection(&mime_type, fd, text);
+    }
+}
+
+impl PrimarySelectionHandler for NestedState {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection_state
+    }
 }
 
 impl ClientDndGrabHandler for NestedState {}
@@ -798,6 +853,7 @@ delegate_shm!(NestedState);
 #[cfg(dmabuf)]
 delegate_dmabuf!(NestedState);
 delegate_data_device!(NestedState);
+delegate_primary_selection!(NestedState);
 delegate_xdg_shell!(NestedState);
 delegate_output!(NestedState);
 delegate_seat!(NestedState);

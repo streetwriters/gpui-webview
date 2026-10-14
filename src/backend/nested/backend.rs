@@ -459,6 +459,17 @@ impl WebViewBackend for NestedBackend {
         let _ = self.commands.send(Command::OutputScale(scale as f64));
     }
 
+    fn bridges_selection(&self) -> bool {
+        // WebKitGTK's clipboard is our private data device (`selection.rs`).
+        true
+    }
+
+    fn set_host_selection(&mut self, selection: crate::spec::Selection, text: Option<String>) {
+        let _ = self
+            .commands
+            .send(Command::HostSelection { selection, text });
+    }
+
     fn surface_presented(&mut self, id: SurfaceId) {
         // Best-effort: the compositor may already be gone.
         let _ = self.commands.send(Command::Presented { id });

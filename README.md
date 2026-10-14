@@ -69,8 +69,12 @@ platform-independent core should depend on.
   real end-to-end test (`tests/nested_e2e.rs`) that needs no display; it passes
   in a bare container (shm) and asserts the imported pixels on a GPU machine
   (`E2E_DMABUF=1`).
-  Limits: no `wl_data_device` clipboard bridge, no IME (`zwp_text_input_v3`)
-  and no touch (`wl_touch`) forwarding yet; CSS cursor images
+  The clipboard and primary selection are bridged as text (the app writes
+  `WebViewEvent::SelectionChanged` to GPUI and offers the host's text with
+  `WebViews::set_host_selection`); in-page drag-and-drop works, but the drag
+  icon is not painted and host file drops are not forwarded.
+  Limits: no IME (`zwp_text_input_v3`) and no touch (`wl_touch`) forwarding
+  yet; CSS cursor images
   (`wl_pointer.set_cursor`) need a GPUI custom-cursor API. The dma-buf
   transport is behind the `dma-buf` feature and needs the patched GPUI crates
   (`scripts/gpui-patch.sh`); without that setup the backend runs `wl_shm`.

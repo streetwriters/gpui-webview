@@ -26,6 +26,7 @@ mod input;
 mod keymap;
 mod policy;
 mod popups;
+mod selection;
 
 pub use backend::NestedBackend;
 
@@ -44,6 +45,8 @@ pub(super) struct Shared {
     /// The commit waker the app installed (`WebViewBackend::set_waker`); the
     /// compositor calls it after publishing a frame.
     pub(super) waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// The page's selections as read back (`selection.rs`), by generation.
+    pub(super) page_selections: Mutex<selection::PageSelections>,
 }
 
 /// Work for the compositor thread — the only crossing besides the shared maps.
@@ -78,6 +81,11 @@ pub(super) enum Command {
     KeyboardLayout(String),
     /// The host window's scale factor; the output advertises it.
     OutputScale(f64),
+    /// The host's text for a selection, offered to the page (`selection.rs`).
+    HostSelection {
+        selection: crate::spec::Selection,
+        text: Option<String>,
+    },
     Shutdown,
 }
 

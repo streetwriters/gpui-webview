@@ -30,6 +30,8 @@ struct MockState {
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
     presented_surfaces: Vec<SurfaceId>,
     supports_local: bool,
+    bridges_selection: bool,
+    host_selections: Vec<(crate::spec::Selection, Option<String>)>,
     fail_attach: bool,
     fail_create: bool,
 }
@@ -49,6 +51,16 @@ impl MockBackend {
     /// A mock that can serve `Source::Local` (for the clip path's tests).
     pub fn supporting_local(self) -> Self {
         self.with(|state| state.supports_local = true)
+    }
+
+    /// A mock that bridges the selection, like the nested Linux compositor.
+    pub fn bridging_selection(self) -> Self {
+        self.with(|state| state.bridges_selection = true)
+    }
+
+    /// The host selections handed over, in order.
+    pub fn host_selections(&self) -> Vec<(crate::spec::Selection, Option<String>)> {
+        self.read(|state| state.host_selections.clone())
     }
 
     /// A mock whose `attach` fails, so `Error::Unsupported` propagation is
@@ -231,6 +243,16 @@ impl WebViewBackend for MockBackend {
 
     fn supports_local(&self) -> bool {
         self.read(|state| state.supports_local)
+    }
+
+    fn bridges_selection(&self) -> bool {
+        self.read(|state| state.bridges_selection)
+    }
+
+    fn set_host_selection(&mut self, selection: crate::spec::Selection, text: Option<String>) {
+        if let Ok(mut state) = self.state.lock() {
+            state.host_selections.push((selection, text));
+        }
     }
 
     fn events(&mut self) -> Vec<WebViewEvent> {

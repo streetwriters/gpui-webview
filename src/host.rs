@@ -113,6 +113,21 @@ pub trait WebViewBackend: 'static {
     /// Default: no-op.
     fn set_scale_factor(&mut self, _scale: f32) {}
 
+    /// Whether the engine's clipboard and primary selection are private to
+    /// the backend, so the app bridges them: it hands the host's text over
+    /// with [`set_host_selection`](Self::set_host_selection) and writes
+    /// [`WebViewEvent::SelectionChanged`](crate::WebViewEvent) back. Engines
+    /// on the platform's own clipboard (WKWebView, WebView2, an iframe) say
+    /// `false`, the default.
+    fn bridges_selection(&self) -> bool {
+        false
+    }
+
+    /// The host's current text for `selection` (`None`: no text), offered to
+    /// the page for its next paste. Only called when
+    /// [`bridges_selection`](Self::bridges_selection). Default: no-op.
+    fn set_host_selection(&mut self, _selection: crate::spec::Selection, _text: Option<String>) {}
+
     /// Sets the streaming source for `Source::Local` (once, before any `create`).
     fn set_scheme_loader(&mut self, _loader: std::sync::Arc<dyn SchemeLoader>) {}
 

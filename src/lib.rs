@@ -89,7 +89,7 @@ pub use manager::WebViews;
 pub use paint::{ReadyFrame, ReadyPopup, paint_frame};
 pub use spec::{
     Config, ContextMenu, Engine, Error, Navigation, OverlayBehavior, Placement, PointerButton,
-    Policy, PopupFrame, Presentation, Result, Source, Storage, SurfaceContent, SurfaceFrame,
+    Policy, PopupFrame, Presentation, Result, Selection, Source, Storage, SurfaceContent, SurfaceFrame,
     SurfaceId, SurfaceSpec, WebInputEvent, WebViewEvent,
 };
 #[cfg(dmabuf)]

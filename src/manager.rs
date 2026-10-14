@@ -511,6 +511,21 @@ impl WebViews {
         self.backend.set_keyboard_layout(name);
     }
 
+    /// Whether the app must bridge the clipboard and primary selection (see
+    /// [`WebViewBackend::bridges_selection`]).
+    pub fn bridges_selection(&self) -> bool {
+        self.backend.bridges_selection()
+    }
+
+    /// Offers the host's text for `selection` to the pages' next paste (see
+    /// [`WebViewBackend::set_host_selection`]); a no-op when the backend does
+    /// not bridge.
+    pub fn set_host_selection(&mut self, selection: crate::spec::Selection, text: Option<String>) {
+        if self.backend.bridges_selection() {
+            self.backend.set_host_selection(selection, text);
+        }
+    }
+
     /// Forwards the host window's scale factor (see
     /// [`WebViewBackend::set_scale_factor`]); only changes reach the backend,
     /// so a caller can report it every paint.

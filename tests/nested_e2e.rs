@@ -526,6 +526,251 @@ mod linux {
             }
         }
     }
+    impl Harness {
+        /// The clipboard bridge (`selection.rs`), on its own page: a page copy
+        /// reaches the host as `SelectionChanged`, and the host's clipboard and
+        /// primary selection paste into the page (Ctrl+V, middle-click).
+        fn step_clipboard(&mut self) {
+            self.activate_clipboard_page();
+            self.focus();
+
+            // Page → host: Ctrl+C on the page's own selection.
+            let control = gpui_kit::Modifiers {
+                control: true,
+                ..Default::default()
+            };
+            self.mods(control);
+            for pressed in [true, false] {
+                self.webviews.input(
+                    0,
+                    gpui_webview::WebInputEvent::Key {
+                        keystroke: gpui_kit::Keystroke {
+                            modifiers: control,
+                            key: "c".into(),
+                            key_char: None,
+                        },
+                        pressed,
+                    },
+                );
+            }
+            self.mods(Default::default());
+            let mut seen = Vec::new();
+            let copied = self.until(5, |h| {
+                for event in h.webviews.events() {
+                    if let gpui_webview::WebViewEvent::SelectionChanged { selection, text } = event
+                    {
+                        seen.push((selection, text));
+                    }
+                }
+                seen.iter().any(|(selection, text)| {
+                    *selection == gpui_webview::Selection::Clipboard
+                        && text.contains("copied-from-page")
+                })
+            });
+            if !copied {
+                fail(&format!(
+                    "a page copy never reached the host (saw {seen:?})"
+                ));
+            }
+            println!(
+                "clipboard: the page's copy reached the host ({} event(s))",
+                seen.len()
+            );
+
+            // Host → page: the host's clipboard pastes into the textarea.
+            self.webviews.set_host_selection(
+                gpui_webview::Selection::Clipboard,
+                Some("pasted-from-host".into()),
+            );
+            self.click(gpui_webview::PointerButton::Left, 100.0, 120.0);
+            // WebKit queues mouse and key events apart: a key sent right after
+            // the click can land before the textarea has focus.
+            self.expect("clipboard focus", "focused", 5, |bytes| {
+                count_rgb(bytes, clipboard_colour("focused"))
+            });
+            // The textarea has the caret: a typed key lands in it.
+            self.key("x", true);
+            self.key("x", false);
+            self.expect("clipboard typing", "typed", 5, |bytes| {
+                count_rgb(bytes, clipboard_colour("typed"))
+            });
+            self.mods(control);
+            for pressed in [true, false] {
+                self.webviews.input(
+                    0,
+                    gpui_webview::WebInputEvent::Key {
+                        keystroke: gpui_kit::Keystroke {
+                            modifiers: control,
+                            key: "v".into(),
+                            key_char: None,
+                        },
+                        pressed,
+                    },
+                );
+            }
+            self.mods(Default::default());
+            self.expect("clipboard paste", "pasted", 5, |bytes| {
+                count_rgb(bytes, clipboard_colour("pasted"))
+            });
+
+            // Page → host primary: a drag-selection, once the textarea click has
+            // cleared the load-time selection (a press inside a selection starts
+            // a drag-and-drop instead). T49: it must be a focused selection;
+            // the load-time one was refused, and GTK would keep serving it.
+            for event in [
+                WebInputEvent::PointerMotion { x: 2.0, y: 10.0 },
+                WebInputEvent::PointerButton {
+                    x: 2.0,
+                    y: 10.0,
+                    button: gpui_webview::PointerButton::Left,
+                    pressed: true,
+                },
+                WebInputEvent::PointerMotion { x: 100.0, y: 10.0 },
+                WebInputEvent::PointerMotion { x: 200.0, y: 10.0 },
+                WebInputEvent::PointerButton {
+                    x: 200.0,
+                    y: 10.0,
+                    button: gpui_webview::PointerButton::Left,
+                    pressed: false,
+                },
+            ] {
+                self.webviews.input(0, event);
+                // One event per pump: WebKit coalesces a drag sent in one batch.
+                self.until(0, |_| false);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let mut seen = Vec::new();
+            let selected = self.until(5, |h| {
+                for event in h.webviews.events() {
+                    if let gpui_webview::WebViewEvent::SelectionChanged { selection, text } = event
+                    {
+                        seen.push((selection, text));
+                    }
+                }
+                seen.iter().any(|(selection, text)| {
+                    *selection == gpui_webview::Selection::Primary
+                        && text.contains("copied-from-page")
+                })
+            });
+            if !selected {
+                fail(&format!(
+                    "a page selection never reached the host's primary (saw {seen:?})"
+                ));
+            }
+            println!("clipboard: the page's selection reached the host's primary");
+
+            // Host → page: the host's primary selection on a middle-click.
+            self.webviews.set_host_selection(
+                gpui_webview::Selection::Primary,
+                Some("primary-from-host".into()),
+            );
+            self.click(gpui_webview::PointerButton::Middle, 100.0, 120.0);
+            self.expect("primary paste", "primary", 5, |bytes| {
+                count_rgb(bytes, clipboard_colour("primary"))
+            });
+            self.webviews.deactivate(0);
+        }
+    }
+    impl Harness {
+        /// Drag-and-drop inside the page: the preselected paragraph dragged
+        /// into the textarea (the client's own source, through smithay's DnD
+        /// grab on the pointer).
+        fn step_dnd(&mut self) {
+            self.activate_clipboard_page();
+            self.focus();
+            let left = gpui_webview::PointerButton::Left;
+            let path = [
+                WebInputEvent::PointerMotion { x: 40.0, y: 10.0 },
+                WebInputEvent::PointerButton {
+                    x: 40.0,
+                    y: 10.0,
+                    button: left,
+                    pressed: true,
+                },
+                WebInputEvent::PointerMotion { x: 50.0, y: 20.0 },
+                WebInputEvent::PointerMotion { x: 70.0, y: 60.0 },
+                WebInputEvent::PointerMotion { x: 90.0, y: 100.0 },
+                WebInputEvent::PointerMotion { x: 100.0, y: 120.0 },
+                WebInputEvent::PointerMotion { x: 101.0, y: 121.0 },
+                WebInputEvent::PointerButton {
+                    x: 101.0,
+                    y: 121.0,
+                    button: left,
+                    pressed: false,
+                },
+            ];
+            for (index, event) in path.into_iter().enumerate() {
+                self.webviews.input(0, event);
+                // WebKit starts the drag asynchronously (`start_drag` lands
+                // after a few motions) and negotiates the action per motion: a
+                // release sent before that cancels the drop. Pace it like a hand.
+                let pause = if index == 2 || index == 6 { 500 } else { 100 };
+                let until = Instant::now() + Duration::from_millis(pause);
+                while Instant::now() < until {
+                    self.pump();
+                    std::thread::sleep(Duration::from_millis(16));
+                }
+            }
+            self.expect("dnd drop", "dropped", 5, |bytes| {
+                count_rgb(bytes, clipboard_colour("dropped"))
+            });
+            self.webviews.deactivate(0);
+        }
+        /// Activates [`CLIPBOARD_PAGE`] and waits for its script.
+        fn activate_clipboard_page(&mut self) {
+            let spec = SurfaceSpec::new(
+                Source::Html {
+                    html: CLIPBOARD_PAGE.into(),
+                    base: None,
+                },
+                Policy {
+                    scripts: true,
+                    ..Policy::default()
+                },
+                "clipboard",
+            )
+            .with_size(self.width, self.height);
+            self.webviews.activate(0, spec).unwrap_or_else(|error| {
+                fail(&format!("clipboard page activation failed: {error}"))
+            });
+            self.expect("clipboard page", "ready", 10, |bytes| {
+                count_rgb(bytes, clipboard_colour("ready"))
+            });
+            let _ = self.webviews.events();
+        }
+    }
+    use gpui_webview::WebInputEvent;
+    /// The clipboard step's page: a preselected source paragraph and a
+    /// textarea that recolours the page by what was pasted into it.
+    const CLIPBOARD_PAGE: &str = "<!doctype html><html><body style=\"margin:0;background:#c81e1e\">\
+        <p id=\"src\" style=\"margin:0;font:20px sans-serif\">copied-from-page</p>\
+        <textarea id=\"dst\" style=\"position:absolute;left:10px;top:80px;\
+        width:290px;height:100px\"></textarea>\
+        <script>\
+        var b = document.body, dst = document.getElementById('dst');\
+        dst.addEventListener('focus', function(){ b.style.background = '#3c3c9a'; });\
+        dst.addEventListener('input', function(){\
+        if (dst.value.indexOf('primary-from-host') >= 0) b.style.background = '#7f1ec8';\
+        else if (dst.value.indexOf('pasted-from-host') >= 0) b.style.background = '#1ec87f';\
+        else if (dst.value.indexOf('copied-from-page') >= 0) b.style.background = '#9a3c3c';\
+        else b.style.background = '#c8c8c8';});\
+        var range = document.createRange();\
+        range.selectNodeContents(document.getElementById('src'));\
+        getSelection().removeAllRanges(); getSelection().addRange(range);\
+        b.style.background = '#1e7f1e';\
+        </script></body></html>";
+    /// The clipboard page's colours (see [`CLIPBOARD_PAGE`]).
+    fn clipboard_colour(name: &str) -> u32 {
+        match name {
+            "ready" => 0x1e7f1e,
+            "pasted" => 0x1ec87f,
+            "primary" => 0x7f1ec8,
+            "typed" => 0xc8c8c8,
+            "focused" => 0x3c3c9a,
+            "dropped" => 0x9a3c3c,
+            _ => panic!("unknown clipboard page colour {name}"),
+        }
+    }
     /// The first committed frame, whichever transport carried it.
     struct FirstFrame {
         elapsed: Duration,
@@ -911,7 +1156,7 @@ mod linux {
             height,
             html,
         };
-        let steps: [(&str, fn(&mut Harness)); 13] = [
+        let steps: [(&str, fn(&mut Harness)); 15] = [
             ("script", Harness::step_script),
             ("click", Harness::step_click),
             ("key", Harness::step_key),
@@ -925,6 +1170,8 @@ mod linux {
             ("scale", Harness::step_scale),
             ("navigation", Harness::step_navigation),
             ("storage", Harness::step_storage),
+            ("clipboard", Harness::step_clipboard),
+            ("dnd", Harness::step_dnd),
         ];
         let only = std::env::var("E2E_ONLY").ok();
         let mut ran = 0;

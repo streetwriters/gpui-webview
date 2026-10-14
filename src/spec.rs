@@ -463,6 +463,15 @@ impl WebInputEvent {
     }
 }
 
+/// Which system selection a text transfer is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Selection {
+    /// The clipboard (copy/paste).
+    Clipboard,
+    /// The primary selection (select, then middle-click paste; Linux).
+    Primary,
+}
+
 /// What the manager and backends report back (EMBEDS.md §8); drained in order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WebViewEvent {
@@ -491,6 +500,14 @@ pub enum WebViewEvent {
     Closed {
         id: SurfaceId,
         key: u64,
+    },
+    /// The page set `selection` to `text` (a copy, or a new primary
+    /// selection); the app writes it to the host's own. Only backends whose
+    /// engine has no system clipboard of its own raise it
+    /// ([`WebViewBackend::bridges_selection`](crate::WebViewBackend::bridges_selection)).
+    SelectionChanged {
+        selection: Selection,
+        text: String,
     },
 }
 
