@@ -30,8 +30,12 @@ wry = [
 ]
 # Linux only: the in-process nested Wayland compositor (smithay). See
 # `backend/nested.rs` and EMBEDS.md §10.3.
-nested = ["wry", "dep:smithay", "dep:gtk", "dep:webkit2gtk", "dep:image"]
+nested = ["wry", "dep:smithay", "dep:libc", "dep:gtk", "dep:webkit2gtk", "dep:image"]
 # Optional fast paths; every backend must work without them (EMBEDS.md §14).
+# Linux only: import committed dma-bufs as GPU textures (the `linux-dmabuf`
+# fast path). Requires the patched GPUI crates (`scripts/gpui-patch.sh` +
+# `vendor/gpu-patch`); off by default so a fresh checkout builds vanilla GPUI
+# and runs `wl_shm`. Every backend must work without it (EMBEDS.md §14).
 dma-buf = []
 wayland-surface = []
 # "Open in window" / fullscreen presentations (a separate GPUI window).
@@ -90,6 +94,9 @@ smithay = { version = "0.7", optional = true, default-features = false, features
     "wayland_frontend",
     "desktop",
 ] }
+# `makedev` for the linux-dmabuf feedback's device id, `dup` for the frame
+# descriptors.
+libc = { version = "0.2", optional = true }
 gtk = { version = "0.18", optional = true }
 # WebKitGTK's settings (the script switch); pinned to wry's own version so the
 # `WebView` type is the same crate.
@@ -109,3 +116,9 @@ required-features = ["nested"]
 
 [dev-dependencies]
 gpui-kit = { version = "0.6.6", default-features = false, features = ["test-support"] }
+
+# The `nested_e2e` test imports and samples committed dma-bufs through the same
+# code the app uses, and builds the compositor's feedback from the same
+# capability query. Linux-only (the test is).
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gpui_wgpu = { package = "gpui-pre-wgpu", version = "0.3.6" }
