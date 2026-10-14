@@ -19,7 +19,7 @@ Initial incubation in the Notesnook GPUI spike (EMBEDS.md §7–§15).
 - `examples/demo.rs`: a standalone GPUI app proving reuse without any editor
   dependency.
 
-### Input/event audit fixes (2026-10-13, `WEBVIEW_INPUT_AUDIT.md`)
+### Input/event audit fixes (2026-10-13)
 
 - `WebInputEvent` grew `PointerEnter`, `PointerLeave` and `Modifiers`;
   motion/enter/leave are position-routed, so hover works before a click and
@@ -67,3 +67,18 @@ Initial incubation in the Notesnook GPUI spike (EMBEDS.md §7–§15).
   - Every forwarded button goes through one press path, and the E2E is one
     Linux module with `count_rgb`, a shared colour table, named harness steps
     and an `E2E_ONLY=` filter.
+- Scope pass (review follow-up):
+  - `ContextMenu::Engine` was removed (nothing set it); `Trimmed` (default)
+    and `Off` stay.
+  - `Engine::fullscreen` was removed: the request is always intercepted and
+    reported as `FullscreenRequested`, and "Enter Full Screen" is always
+    trimmed from the engine's menu.
+  - The editor routes `FullscreenRequested` straight to its external-open
+    fallback (no `present` round trip while no backend can present).
+- Reduction follow-up:
+  - `ReadyFrame`/`ReadyPopup` + `paint_frame` own the dma-buf import and the
+    paint call, so an application never touches `ExternalTexture` or
+    `SurfaceContent`; the import cache keys on the buffer generation alone.
+  - One `#[cfg(dmabuf)]` alias (via a build script) replaces the three-part
+    `target_os + feature` condition, and the nested backend shares one state
+    struct instead of four `Arc<Mutex<…>>` maps.

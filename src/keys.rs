@@ -1,20 +1,15 @@
 //! GPUI keystrokes to physical keys.
 //!
 //! GPUI names a keystroke by its *keysym*: punctuation arrives as the shifted
-//! name (`@` for the `2` key) with the Shift that needed it stripped, and a
-//! release after Shift is released first comes back under the base name. A
-//! page needs the physical key in both cases, and the editor's held-key
-//! tracking must pair the halves, so both go through [`physical_key`].
+//! name (`@` for `2`) with Shift stripped, and a release can come back under
+//! the base name. A page needs the physical key; [`physical_key`] is the one
+//! place that maps to it (the editor tracks held keys by its result).
 
 use gpui_kit::Keystroke;
 
-/// The physical key a keystroke names, as a Linux input-event code (evdev —
-/// the code space smithay's keymap consumes, so it doubles as the portable
-/// identity for held keys).
-///
-/// The key *name* is tried first, then `key_char` (for layouts whose keysym
-/// names are not US names). Unknown keys return `None`: a page should receive
-/// nothing rather than a mistyped key.
+/// The physical key a keystroke names, as an evdev code (the space smithay's
+/// keymap consumes). The name is tried first, then `key_char`; unknown keys
+/// return `None` rather than a mistyped key.
 pub fn physical_key(keystroke: &Keystroke) -> Option<u32> {
     if let Some(code) = code_for_name(&keystroke.key) {
         return Some(code);
@@ -28,9 +23,8 @@ pub fn physical_key(keystroke: &Keystroke) -> Option<u32> {
     code_for_name(&first.to_ascii_lowercase().to_string())
 }
 
-/// A US-layout table for the keys a page needs. `Fn` is deliberately absent:
-/// it is a hardware modifier platforms do not report as a key event, and a
-/// code for it would type nothing (the old table reused the Menu key's code).
+/// A US-layout table for the keys a page needs. `Fn` is absent: it is a
+/// hardware modifier and a code for it would type nothing.
 fn code_for_name(key: &str) -> Option<u32> {
     Some(match key {
         "a" => 30,

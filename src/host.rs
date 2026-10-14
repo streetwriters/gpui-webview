@@ -1,10 +1,6 @@
-//! The backend contract: one implementation per platform, one instance per
-//! process window (EMBEDS.md §8/§9). (On Linux the nested backend itself is
-//! process-wide; the manager is the per-window piece.)
-//!
-//! `attach` hands the backend the window's raw handle once. After that every
-//! call is state or geometry, so a host can drive the surface from its render
-//! and paint paths without touching platform APIs.
+//! The backend contract: one implementation per platform (EMBEDS.md §8/§9); on
+//! Linux the backend is process-wide and the manager is per window. `attach`
+//! hands over the window once; everything after is state or geometry.
 
 use gpui_kit::{Window, px};
 
@@ -12,25 +8,18 @@ use crate::spec::{
     Error, OverlayBehavior, Placement, Presentation, Result, Source, SurfaceId, SurfaceSpec,
 };
 
-/// A seekable, owned byte stream for `Source::Local` content (a web clip's
-/// saved page). Boxed through a blanket impl; produced by an app's
-/// [`SchemeLoader`].
+/// A seekable byte stream for `Source::Local` content; produced by a [`SchemeLoader`].
 pub trait ReadSeek: std::io::Read + std::io::Seek + Send {}
 impl<T: std::io::Read + std::io::Seek + Send> ReadSeek for T {}
 
-/// Streams `Source::Local` content to the surface. The app implements this
-/// over its attachment store; the bytes never pass through the crate's callers
-/// or their documents (EMBEDS.md §5).
-///
-/// A backend registers the scheme with the platform engine (a URL-scheme
-/// handler on `WKWebView`/WebView2/WebKitGTK, a blob URL on the web) and pulls
-/// ranges through these methods when the engine asks.
+/// Streams `Source::Local` content to the surface; the app implements it over
+/// its attachment store (EMBEDS.md §5). A backend registers the scheme with the
+/// platform engine and pulls ranges through these methods.
 pub trait SchemeLoader: Send + Sync + 'static {
     /// Opens `scheme://path`. Called once per navigation/range at most.
     fn open(&self, scheme: &str, path: &str) -> Result<Box<dyn ReadSeek>>;
 
-    /// The total length in bytes, when known without opening. `None` lets a
-    /// backend fall back to buffering.
+    /// The total length when known without opening; `None` lets a backend buffer.
     fn len(&self, scheme: &str, path: &str) -> Option<u64> {
         let _ = (scheme, path);
         None
@@ -43,108 +32,80 @@ pub trait SchemeLoader: Send + Sync + 'static {
     }
 }
 
-/// The backend contract.
-///
-/// Implementations must be `'static` (the manager owns them). Every method is
-/// fallible only where the platform can refuse; `place` and `destroy` never
-/// fail: geometry and teardown must always be attempted.
+/// The backend contract. Implementations are `'static`; only the platform-refusable methods fail.
 pub trait WebViewBackend: 'static {
     /// The backend's name for diagnostics ("mock", "web", "macos", …).
     fn name(&self) -> &'static str {
         "backend"
     }
 
-    /// Binds the backend to a window. Called once, before the first `create`.
-    /// A backend that cannot attach must say so now, so the manager can
-    /// degrade to `Error::Unsupported` before any engine exists.
+    /// Binds the backend to a window (once, before the first `create`). A failure
+    /// here degrades to `Error::Unsupported` before any engine exists.
     fn attach(&mut self, window: &Window) -> Result<()>;
 
-    /// Creates a surface for `id`. Called at most `Config::capacity` times
-    /// over the backend's life (a reused surface is *navigated*, not
-    /// recreated).
+    /// Creates a surface for `id` (at most `Config::capacity` times per backend).
     fn create(&mut self, id: SurfaceId, spec: SurfaceSpec) -> Result<()>;
 
-    /// Navigates an existing surface to new content (pool reuse). The default
-    /// recreates the engine, which is exactly what the pool exists to avoid;
-    /// real backends override it.
+    /// Navigates an existing surface to new content (pool reuse; the default
+    /// recreates the engine, real backends override it).
     fn navigate(&mut self, id: SurfaceId, spec: SurfaceSpec) -> Result<()> {
         self.destroy(id);
         self.create(id, spec)
     }
 
-    /// Applies geometry and visibility. `Placement::rect` is the full block;
-    /// clipping changes only what is shown, never the page's layout.
+    /// Applies geometry and visibility; clipping never changes the page's layout.
     fn place(&mut self, id: SurfaceId, at: Placement);
 
-    /// Routes keyboard focus into (or out of) the surface.
     fn set_focus(&mut self, id: SurfaceId, focused: bool);
 
-    /// Opens the separate-window / fullscreen presentation. `Inline` restores
-    /// the inline surface.
+    /// Opens the separate-window / fullscreen presentation; `Inline` restores.
     fn present(&mut self, id: SurfaceId, mode: Presentation) -> Result<()>;
 
     /// Tears the surface down. Must be safe to call twice.
     fn destroy(&mut self, id: SurfaceId);
 
-    /// The latest decoded frame for a self-compositing backend, so the app can
-    /// paint it (the nested Linux compositor). `None` for backends whose
-    /// platform layer composites the surface itself, and for a surface that
-    /// has not committed a buffer yet.
+    /// The latest decoded frame for a self-compositing backend (the nested
+    /// compositor); `None` otherwise, and before the first commit.
     fn frame_image(&mut self, _id: SurfaceId) -> Option<crate::spec::SurfaceFrame> {
         None
     }
 
-    /// The native popups (context menus, `<select>` dropdowns) currently mapped
-    /// above `id`'s surface, in paint order (bottom to top). Only
-    /// self-compositing backends produce these; empty everywhere else and when
-    /// nothing is open.
+    /// Native popups above `id`'s surface, bottom to top; only self-compositing
+    /// backends produce these.
     fn popup_frames(&mut self, _id: SurfaceId) -> Vec<crate::spec::PopupFrame> {
         Vec::new()
     }
 
-    /// Forwards one input event to a surface. Only self-compositing backends
-    /// consume it; child-view backends ignore it (their platform view already
-    /// got the event).
+    /// Forwards one input event; only self-compositing backends consume it.
     fn input(&mut self, _id: SurfaceId, _event: crate::spec::WebInputEvent) {}
 
-    /// What `Config::on_overlay` this backend can honour: a self-compositing
-    /// backend paints through GPUI's own scene, so overlays composite above the
-    /// live page; a child-view backend must freeze until the transparent-hole
-    /// pattern lands. The default is `Freeze`; see
-    /// [`crate::WebViews::platform_overlay_behavior`].
+    /// What `Config::on_overlay` this backend can honour: a self-compositing one
+    /// lowers (overlays paint above), a child view freezes. Default: `Freeze`.
     fn default_overlay_behavior(&self) -> OverlayBehavior {
         OverlayBehavior::Freeze
     }
 
-    /// Whether the backend has more client work to pump through (a GTK/WebKit
-    /// frame in flight, an animation ticking) and the app should schedule one
-    /// more animation frame. `false` everywhere else, and for an idle surface.
-    /// The nested backend sets it while `pump_gtk` drained anything, so the
-    /// commit → pump → paint loop cannot stall between commits.
+    /// T21: whether the app should schedule another animation frame to keep the
+    /// commit → pump → paint loop alive. `false` for an idle surface.
     fn wants_animation_frame(&mut self) -> bool {
         false
     }
 
-    /// Sets the streaming source for `Source::Local`. Called once at setup,
-    /// before any `create`.
+    /// Sets the streaming source for `Source::Local` (once, before any `create`).
     fn set_scheme_loader(&mut self, _loader: std::sync::Arc<dyn SchemeLoader>) {}
 
-    /// Backend-originated events since the last drain. The manager forwards
-    /// them with its own; a backend with nothing to say returns empty.
+    /// Backend-originated events since the last drain.
     fn events(&mut self) -> Vec<crate::spec::WebViewEvent> {
         Vec::new()
     }
 
-    /// Whether the backend can serve `Source::Local` (it needs a scheme
-    /// handler or a blob URL). The manager refuses a local surface on a
-    /// backend that cannot, instead of navigating it to nothing.
+    /// Whether the backend can serve `Source::Local` (a scheme handler or blob URL).
     fn supports_local(&self) -> bool {
         false
     }
 }
 
-/// The inline rect of a surface from a placement: the block's box, without the
-/// clip (the backend clips; the page must not relayout).
+/// The block's box from a placement, without the clip (the backend clips).
 #[allow(dead_code)] // Used by the platform backends behind features.
 pub(crate) fn surface_rect(at: &Placement) -> gpui_kit::Bounds<gpui_kit::Pixels> {
     at.rect
@@ -157,8 +118,7 @@ pub(crate) fn empty_bounds() -> gpui_kit::Bounds<gpui_kit::Pixels> {
     Bounds::new(point(px(0.), px(0.)), size(px(0.), px(0.)))
 }
 
-/// Whether a spec can be served by `backend`, so the caller gets a poster +
-/// `openUrl` fallback instead of a blank engine.
+/// Whether `backend` can serve a spec (otherwise: poster + `openUrl` fallback).
 pub fn spec_supported(backend: &dyn WebViewBackend, spec: &SurfaceSpec) -> bool {
     match &spec.source {
         Source::Local { .. } => backend.supports_local(),
@@ -170,9 +130,7 @@ pub fn spec_supported(backend: &dyn WebViewBackend, spec: &SurfaceSpec) -> bool 
     }
 }
 
-/// A backend that cannot do anything, used when no platform feature is built.
-/// `platform_default` returns `Unsupported` before this is ever created, but
-/// tests and hosts can install it explicitly.
+/// A backend that cannot do anything; tests and hosts can install it explicitly.
 pub struct UnsupportedBackend(pub &'static str);
 
 impl WebViewBackend for UnsupportedBackend {
@@ -207,12 +165,8 @@ mod tests {
     #[test]
     fn only_http_sources_are_remote_surface_material() {
         let backend = UnsupportedBackend("test");
-        let supported = |source| {
-            spec_supported(
-                &backend,
-                &SurfaceSpec::new(source, Policy::strict(), "x"),
-            )
-        };
+        let supported =
+            |source| spec_supported(&backend, &SurfaceSpec::new(source, Policy::strict(), "x"));
         assert!(supported(Source::Url("https://example.com".into())));
         assert!(supported(Source::Url("http://localhost:8080".into())));
         assert!(!supported(Source::Url("javascript:alert(1)".into())));

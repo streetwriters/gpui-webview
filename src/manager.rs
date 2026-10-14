@@ -1,22 +1,19 @@
-//! The pool and its policy: capacity, reuse, yield and teardown
-//! (EMBEDS.md §8).
+//! The pool and its policy: capacity, reuse, yield, teardown (EMBEDS.md §8).
 //!
-//! The manager is the only stateful piece of the crate. It owns the backend,
-//! mints [`SurfaceId`]s, keeps at most `Config::capacity` engines alive, and
-//! forwards only *changes* to the backend so a caller can drive it from its
-//! paint pass every frame.
+//! The manager owns the backend, mints [`SurfaceId`]s, keeps at most
+//! `Config::capacity` engines alive and forwards only changes, so a caller can
+//! drive it from its paint pass every frame.
 
 use std::sync::Arc;
 
 use gpui_kit::{Bounds, Pixels, Window};
 
 use crate::host::{SchemeLoader, WebViewBackend, spec_supported};
+pub use crate::spec::WebViewEvent as Event;
 use crate::spec::{
     Config, Error, OverlayBehavior, Placement, Presentation, Result, SurfaceId, SurfaceSpec,
     WebViewEvent,
 };
-pub use crate::spec::WebViewEvent as Event;
-
 
 /// One live surface as the manager knows it.
 struct Surface {
@@ -24,108 +21,64 @@ struct Surface {
     key: u64,
     spec: SurfaceSpec,
     focused: bool,
-    /// Monotonic frame counter of the last frame this surface was placed; the
-    /// eviction order for reuse.
+    /// Frame counter of its last placement; the eviction order for reuse.
     last_seen: u64,
-    /// The last effective placement forwarded to the backend, so unchanged
-    /// frames are skipped.
+    /// The last placement forwarded, so unchanged frames are skipped.
     last_placement: Option<Placement>,
 }
 
-/// What identifies an imported dma-buf texture for the buffer's whole life:
-/// the compositor's per-buffer generation (never reused), plus the properties
-/// a recycled protocol id could otherwise mask (size/format changes).
-#[cfg(all(target_os = "linux", feature = "dma-buf"))]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct DmaBufKey {
-    generation: u64,
-    width: u32,
-    height: u32,
-    fourcc: u32,
-    modifier: u64,
-}
-
-#[cfg(all(target_os = "linux", feature = "dma-buf"))]
-impl DmaBufKey {
-    fn of(frame: &crate::spec::DmaBufFrame) -> Self {
-        Self {
-            generation: frame.buffer_id,
-            width: frame.width,
-            height: frame.height,
-            fourcc: frame.fourcc,
-            modifier: frame.modifier,
-        }
-    }
-}
-
-/// The imported dma-buf textures and the failed-import memo, keyed by the
-/// backend's `SurfaceId` — never the caller-facing key, so a `rekey` cannot
-/// strand an entry — and the popup id (`0` is the page's own frame), then by
-/// the buffer's identity. An identity is the compositor's per-buffer
-/// generation (a Wayland protocol id is *reused* after the client destroys a
-/// buffer) plus the buffer's geometry and format, so a recycled id can never
-/// hit a stale texture. WebKit rotates a small buffer pool, so the last few
-/// imports of a slot are kept; dropping the handles lets the renderer release
-/// the GPU textures (and their imported memory).
-///
-/// A failing buffer is remembered per slot: the client keeps committing it,
-/// but the (expensive) Vulkan import is not retried every paint. A *new*
-/// generation retries once, so a transient failure can recover without a
-/// surface reload.
-///
-/// Without Linux + `dma-buf` the fields do not exist and the housekeeping
-/// methods are no-ops, so teardown call sites need no `#[cfg]`.
+/// Imported dma-buf textures and failed-import memos, keyed by the backend
+/// `SurfaceId` (never the caller key, so a `rekey` cannot strand entries) and
+/// popup id (`0` = the page), then by the buffer's never-reused generation
+/// (T10). The last few imports per slot are kept; a failed generation is
+/// remembered until an import succeeds again, so the import is not retried per
+/// paint. No-op without Linux + `dma-buf`, so teardown call sites need no `cfg`.
 #[derive(Default)]
 struct DmaBufCache {
-    #[cfg(all(target_os = "linux", feature = "dma-buf"))]
-    textures:
-        std::collections::HashMap<(SurfaceId, u64), Vec<(DmaBufKey, gpui_kit::ExternalTexture)>>,
-    #[cfg(all(target_os = "linux", feature = "dma-buf"))]
-    failed: std::collections::HashMap<(SurfaceId, u64), (Vec<u64>, bool)>,
+    #[cfg(dmabuf)]
+    textures: std::collections::HashMap<(SurfaceId, u64), Vec<(u64, gpui_kit::ExternalTexture)>>,
+    #[cfg(dmabuf)]
+    failed: std::collections::HashMap<(SurfaceId, u64), Vec<u64>>,
 }
 
 impl DmaBufCache {
     /// Drops every slot of `id`'s surface (page and popups).
     fn forget(&mut self, id: SurfaceId) {
-        #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+        #[cfg(dmabuf)]
         {
             self.textures.retain(|(owner, _), _| *owner != id);
             self.failed.retain(|(owner, _), _| *owner != id);
         }
-        #[cfg(not(all(target_os = "linux", feature = "dma-buf")))]
+        #[cfg(not(dmabuf))]
         let _ = id;
     }
 
-    /// Keeps `id`'s page slot and the popups in `live`, dropping its other
-    /// popup slots (a menu opens and closes many times per session, and each
-    /// popup owns a slot).
+    /// Keeps `id`'s page slot and the popups in `live`; drops its other popup slots.
     fn retain_popups(&mut self, id: SurfaceId, live: &[u64]) {
-        #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+        #[cfg(dmabuf)]
         {
             self.textures
                 .retain(|(owner, popup), _| *owner != id || *popup == 0 || live.contains(popup));
             self.failed
                 .retain(|(owner, popup), _| *owner != id || *popup == 0 || live.contains(popup));
         }
-        #[cfg(not(all(target_os = "linux", feature = "dma-buf")))]
+        #[cfg(not(dmabuf))]
         let _ = (id, live);
     }
 
-    /// Drops every slot whose surface id is not in `live` (the frame path's
-    /// post-teardown sweep).
+    /// Drops every slot whose surface id is not in `live`.
     fn retain(&mut self, live: &[SurfaceId]) {
-        #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+        #[cfg(dmabuf)]
         {
             self.textures.retain(|(owner, _), _| live.contains(owner));
             self.failed.retain(|(owner, _), _| live.contains(owner));
         }
-        #[cfg(not(all(target_os = "linux", feature = "dma-buf")))]
+        #[cfg(not(dmabuf))]
         let _ = live;
     }
 
-    /// Imports `content`'s dma-buf in `slot` (the window's renderer owns the
-    /// resulting texture). `None` for image content or a failed import.
-    #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+    /// Imports a dma-buf in `slot`; `None` for image content or a failed import.
+    #[cfg(dmabuf)]
     fn import(
         &mut self,
         slot: (SurfaceId, u64),
@@ -137,14 +90,16 @@ impl DmaBufCache {
         let SurfaceContent::Dmabuf(frame) = content else {
             return None;
         };
-        let key = DmaBufKey::of(frame);
-        if let Some((failed, _)) = self.failed.get(&slot)
-            && failed.contains(&key.generation)
+        let generation = frame.buffer_id;
+        if self
+            .failed
+            .get(&slot)
+            .is_some_and(|failed| failed.contains(&generation))
         {
             return None;
         }
         let cache = self.textures.entry(slot).or_default();
-        if let Some((_, texture)) = cache.iter().find(|(cached, _)| *cached == key) {
+        if let Some((_, texture)) = cache.iter().find(|(cached, _)| *cached == generation) {
             return Some(texture.clone());
         }
 
@@ -166,46 +121,29 @@ impl DmaBufCache {
         match window.import_dmabuf(descriptor) {
             Ok(texture) => {
                 self.failed.remove(&slot);
-                // A small rotating pool, evicting the oldest buffer. Dropping
-                // the handle lets the renderer release the texture and its
-                // imported memory.
+                // A rotating pool: dropping the oldest handle frees its GPU texture.
                 if cache.len() >= 4 {
                     cache.remove(0);
                 }
-                cache.push((key, texture.clone()));
-                crate::debug::debug_log!(
-                    "imported dma-buf generation {} for {:?} ({} cached)",
-                    key.generation,
-                    slot,
-                    cache.len()
-                );
+                cache.push((generation, texture.clone()));
                 Some(texture)
             }
             Err(error) => {
-                // Once per failure *burst*: the first failure logs, later ones
-                // (other buffers of the rotation included) stay quiet until an
-                // import succeeds again. Every failing generation is
-                // remembered so the (expensive) import is not retried once per
-                // commit. The page keeps its poster (or last frame) meanwhile.
-                let entry = self
-                    .failed
-                    .entry(slot)
-                    .or_insert_with(|| (Vec::new(), false));
-                let first_of_burst = !entry.1;
-                if !entry.0.contains(&key.generation) {
-                    // Bounded: a client allocating new failing buffers forever
-                    // must not grow this without limit.
-                    if entry.0.len() >= 8 {
-                        entry.0.remove(0);
+                // One log per failure burst; every failing generation is remembered so
+                // the import is not retried per commit. The poster stays meanwhile.
+                let failed = self.failed.entry(slot).or_default();
+                let first_of_burst = failed.is_empty();
+                if !failed.contains(&generation) {
+                    // Bounded: a client allocating failing buffers forever must not grow this.
+                    if failed.len() >= 8 {
+                        failed.remove(0);
                     }
-                    entry.0.push(key.generation);
+                    failed.push(generation);
                 }
-                entry.1 = true;
                 if first_of_burst {
                     eprintln!(
-                        "gpui-webview: dma-buf generation {} for {:?} failed to import \
-                         (keeping the poster): {error:#}",
-                        key.generation, slot
+                        "gpui-webview: dma-buf generation {generation} for {slot:?} failed to \
+                         import (keeping the poster): {error:#}"
                     );
                 }
                 None
@@ -240,16 +178,8 @@ impl std::fmt::Debug for WebViews {
 impl WebViews {
     /// What `Config::on_overlay` should be for `platform_default`'s backend on
     /// this target: `Lower` where the backend self-composites (the nested Linux
-    /// compositor paints through GPUI's own scene, so overlays composite
-    /// *above* the live page) and `Freeze` elsewhere (a platform child view
-    /// needs the transparent-hole pattern first). The app asks the crate
-    /// instead of guessing with its own `cfg!`s.
-    ///
-    /// The Linux answer assumes the nested backend, which is the one
-    /// `platform_default` prefers; a session where it refuses falls back to
-    /// the child-view backend, which freezes regardless — a caller that needs
-    /// the exact answer reads
-    /// [`WebViewBackend::default_overlay_behavior`] off the backend.
+    /// compositor), `Freeze` elsewhere. A caller that needs the exact answer
+    /// reads [`WebViewBackend::default_overlay_behavior`].
     pub fn platform_overlay_behavior() -> OverlayBehavior {
         #[cfg(all(target_os = "linux", feature = "nested"))]
         {
@@ -261,16 +191,14 @@ impl WebViews {
         }
     }
 
-    /// Picks the best backend this target/session can run. `Unsupported` when
-    /// no backend feature is compiled in or the runtime is missing, so the app
-    /// always falls back to posters + `openUrl`.
+    /// Picks the best backend this target/session can run; `Unsupported` when
+    /// none is available (the app then uses posters + `openUrl`).
     pub fn platform_default(config: Config) -> Result<Self> {
         #[cfg(all(target_arch = "wasm32", feature = "web"))]
         {
             return Ok(Self::new(crate::backend::web::WebBackend::new(), config));
         }
-        // Linux prefers the nested Wayland compositor: it is the only inline
-        // path with clip + overlay parity on Wayland.
+        // The nested compositor is the only inline path with clip + overlay parity.
         #[cfg(all(target_os = "linux", feature = "nested"))]
         {
             if let Ok(backend) = crate::backend::nested::NestedBackend::new() {
@@ -281,8 +209,7 @@ impl WebViews {
         {
             match crate::backend::native::NativeBackend::new() {
                 Ok(backend) => return Ok(Self::new(backend, config)),
-                // No usable engine on this session (Wayland without the nested
-                // compositor, a broken runtime): fall through to Unsupported.
+                // No usable engine on this session: fall through to Unsupported.
                 Err(_) => return Err(Error::Unsupported),
             }
         }
@@ -314,17 +241,14 @@ impl WebViews {
         }
     }
 
-    /// Installs the streaming source for `Source::Local`. Must happen before
-    /// the first `activate` of a local surface.
+    /// Installs the streaming source for `Source::Local`, before any local `activate`.
     pub fn set_scheme_loader(&mut self, loader: Arc<dyn SchemeLoader>) {
         self.loader = Some(loader.clone());
         self.backend.set_scheme_loader(loader);
     }
 
-    /// Binds the backend to the window. Idempotent; the app calls it from its
-    /// first paint, before any activation. A backend that cannot attach
-    /// reports the failure here, and `activate` then maps the backend's own
-    /// error to `Error::Unsupported`.
+    /// Binds the backend to the window (idempotent; call from the first paint).
+    /// A failure here becomes `Error::Unsupported` on `activate`.
     pub fn attach(&mut self, window: &Window) -> Result<()> {
         if self.attached {
             return Ok(());
@@ -369,19 +293,13 @@ impl WebViews {
             .map(|surface| surface.id)
     }
 
-    /// Makes `key` live and returns its surface id. Repeating the call for an
-    /// already-live key refreshes the spec (navigating only when the content
-    /// or policy actually changed); over capacity, the least recently placed
-    /// engine is **reused by navigation, never recreated**.
+    /// Makes `key` live. Re-activation refreshes the spec (navigating only on a
+    /// real change); over capacity the least recently placed engine is reused.
     pub fn activate(&mut self, key: u64, spec: SurfaceSpec) -> Result<SurfaceId> {
         if !spec_supported(self.backend.as_ref(), &spec) {
             return Err(Error::Unsupported);
         }
-        if let Some(index) = self
-            .surfaces
-            .iter()
-            .position(|surface| surface.key == key)
-        {
+        if let Some(index) = self.surfaces.iter().position(|surface| surface.key == key) {
             if self.surfaces[index].spec != spec {
                 let id = self.surfaces[index].id;
                 self.backend.navigate(id, spec.clone())?;
@@ -403,8 +321,7 @@ impl WebViews {
             });
             return Ok(id);
         }
-        // Over capacity: evict the least recently placed surface and navigate
-        // its engine to the new content.
+        // Over capacity: evict the least recently placed surface by navigation.
         let victim = self
             .surfaces
             .iter()
@@ -415,9 +332,7 @@ impl WebViews {
         let id = self.surfaces[victim].id;
         let old_key = self.surfaces[victim].key;
         self.backend.navigate(id, spec.clone())?;
-        // The engine is reused for new content: the old page's and popups'
-        // imported textures are dead, release them now instead of waiting for
-        // the surface to go away.
+        // The reused engine's old page/popup textures are dead; release them now.
         self.dmabuf.forget(id);
         self.events.push(WebViewEvent::Closed { id, key: old_key });
         self.surfaces[victim] = Surface {
@@ -431,24 +346,21 @@ impl WebViews {
         Ok(id)
     }
 
-    /// Renames a live key without touching the backend: the surface keeps its
-    /// engine and page, only its caller-facing identity moves (an edit shifted
-    /// the block's index). `frame` places it by the new key from then on. The
-    /// dma-buf cache keys on the surface *id*, so nothing has to move with it.
+    /// Renames a live key without touching the backend (an edit shifted the
+    /// block's index); the dma-buf cache keys on the surface id, so nothing moves.
     pub fn rekey(&mut self, old_key: u64, new_key: u64) {
-        if let Some(surface) = self.surfaces.iter_mut().find(|surface| surface.key == old_key) {
+        if let Some(surface) = self
+            .surfaces
+            .iter_mut()
+            .find(|surface| surface.key == old_key)
+        {
             surface.key = new_key;
         }
     }
 
-    /// Tears down `key`'s surface (Esc, the toolbar's Done, scroll-out). A
-    /// no-op for a key that is not live.
+    /// Tears down `key`'s surface; a no-op when it is not live.
     pub fn deactivate(&mut self, key: u64) {
-        if let Some(index) = self
-            .surfaces
-            .iter()
-            .position(|surface| surface.key == key)
-        {
+        if let Some(index) = self.surfaces.iter().position(|surface| surface.key == key) {
             self.remove_surface(index);
         }
     }
@@ -460,10 +372,8 @@ impl WebViews {
         }
     }
 
-    /// Destroys the surface at `index`, drops its dma-buf slots and queues the
-    /// caller-facing `Closed`. The one teardown path: `deactivate`,
-    /// `deactivate_all`, the backend-`Closed` drain and the frame's
-    /// scroll-out prune all go through it.
+    /// Destroys the surface at `index`, drops its dma-buf slots and queues
+    /// `Closed`. The one teardown path for every caller.
     fn remove_surface(&mut self, index: usize) {
         let surface = self.surfaces.remove(index);
         self.backend.destroy(surface.id);
@@ -474,61 +384,83 @@ impl WebViews {
         });
     }
 
-    /// The latest decoded frame of `key`'s surface for the app to paint, when
-    /// the backend composes itself (the nested Linux compositor). `None` for
-    /// child-view backends, which composite through the platform.
+    /// The latest decoded frame of `key`'s surface (self-compositing backends
+    /// only). Raw read: use [`Self::ready_frame`] to paint (it imports dma-buf
+    /// content and caches the texture).
     pub fn frame_image(&mut self, key: u64) -> Option<crate::spec::SurfaceFrame> {
         let surface = self.surfaces.iter().find(|surface| surface.key == key)?;
         self.backend.frame_image(surface.id)
     }
 
-    /// The native popups (context menus, `<select>` dropdowns) of `key`'s
-    /// surface, in paint order (bottom to top). Empty for child-view backends
-    /// and when nothing is open; importing their dma-buf frames goes through
-    /// [`Self::import_popup_frame`].
+    /// Native popups of `key`'s surface, bottom to top. Raw read: use
+    /// [`Self::ready_popups`] to paint them.
     pub fn popup_frames(&mut self, key: u64) -> Vec<crate::spec::PopupFrame> {
         let Some(surface) = self.surfaces.iter().find(|surface| surface.key == key) else {
             return Vec::new();
         };
         let popups = self.backend.popup_frames(surface.id);
-        // A menu opens and closes many times per session and each popup owns a
-        // cache slot; keep only the live ones (and the page's slot).
+        // Keep only live popup cache slots (and the page's).
         let live: Vec<u64> = popups.iter().map(|popup| popup.id).collect();
         self.dmabuf.retain_popups(surface.id, &live);
         popups
     }
 
-    /// The frame's GPU texture, importing the dma-buf through `window` on first
-    /// sight of a client buffer (the `linux-dmabuf` path). `None` for image
-    /// frames, backends that self-composite, and platforms without dma-buf
-    /// import; callers then keep using [`Self::frame_image`].
-    #[cfg(all(target_os = "linux", feature = "dma-buf"))]
-    pub fn import_frame(&mut self, key: u64, window: &mut Window) -> Option<gpui_kit::ExternalTexture> {
-        let id = self.surfaces.iter().find(|surface| surface.key == key)?.id;
-        let frame = self.backend.frame_image(id)?;
-        self.dmabuf.import((id, 0), &frame.content, window)
-    }
-
-    /// A popup's GPU texture, importing its dma-buf on first sight of a client
-    /// buffer (see [`Self::import_frame`]). `None` for image popups; paint
-    /// those directly.
-    #[cfg(all(target_os = "linux", feature = "dma-buf"))]
-    pub fn import_popup_frame(
+    /// The latest frame of `key`'s surface, ready to paint: dma-buf content is
+    /// imported through `window` on first sight of a client buffer; an image
+    /// frame (or a backend without dma-buf) carries its pixels directly.
+    pub fn ready_frame(
         &mut self,
         key: u64,
-        popup: &crate::spec::PopupFrame,
         window: &mut Window,
-    ) -> Option<gpui_kit::ExternalTexture> {
+    ) -> Option<crate::paint::ReadyFrame> {
         let id = self.surfaces.iter().find(|surface| surface.key == key)?.id;
-        self.dmabuf.import((id, popup.id), &popup.frame.content, window)
+        let frame = self.backend.frame_image(id)?;
+        #[cfg(dmabuf)]
+        let texture = self.dmabuf.import((id, 0), &frame.content, window);
+        #[cfg(not(dmabuf))]
+        let _ = window;
+        Some(crate::paint::ReadyFrame {
+            frame,
+            #[cfg(dmabuf)]
+            texture,
+        })
     }
 
-    /// Forwards one input event to `key`'s surface. A no-op unless the surface
-    /// holds keyboard focus — except for the pointer events that carry their own
-    /// focus *by position*: motion, enter/leave, click targets, and the wheel,
-    /// which scroll what the pointer is over whether or not that surface has the
-    /// keyboard. (The page is an iframe: hovering it and scrolling must scroll
-    /// the page, even without clicking it first.)
+    /// The native popups of `key`'s surface, bottom to top, ready to paint
+    /// (dma-buf content is imported like [`Self::ready_frame`]).
+    pub fn ready_popups(&mut self, key: u64, window: &mut Window) -> Vec<crate::paint::ReadyPopup> {
+        let Some(surface) = self.surfaces.iter().find(|surface| surface.key == key) else {
+            return Vec::new();
+        };
+        let id = surface.id;
+        let popups = self.backend.popup_frames(id);
+        // Keep only live popup cache slots (and the page's).
+        let live: Vec<u64> = popups.iter().map(|popup| popup.id).collect();
+        self.dmabuf.retain_popups(id, &live);
+        popups
+            .into_iter()
+            .map(|popup| {
+                #[cfg(dmabuf)]
+                let texture = self
+                    .dmabuf
+                    .import((id, popup.id), &popup.frame.content, window);
+                #[cfg(not(dmabuf))]
+                let _ = window;
+                crate::paint::ReadyPopup {
+                    id: popup.id,
+                    position: popup.position,
+                    frame: crate::paint::ReadyFrame {
+                        frame: popup.frame,
+                        #[cfg(dmabuf)]
+                        texture,
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// Forwards one input event to `key`'s surface. Keys need keyboard focus;
+    /// motion, buttons, wheel and enter/leave route by position (T25).
     pub fn input(&mut self, key: u64, event: crate::spec::WebInputEvent) {
         let Some(surface) = self.surfaces.iter().find(|surface| surface.key == key) else {
             return;
@@ -547,26 +479,20 @@ impl WebViews {
             .map(|surface| surface.key)
     }
 
-    /// Whether the backend has client work to pump through and the app should
-    /// schedule one more animation frame (see
-    /// [`WebViewBackend::wants_animation_frame`]).
+    /// See [`WebViewBackend::wants_animation_frame`].
     pub fn wants_animation_frame(&mut self) -> bool {
         self.backend.wants_animation_frame()
     }
 
-    /// Moves the backend's queued events into the caller-facing queue. A
-    /// backend `Closed` is translated here: the engine is gone, only the
-    /// manager knows the caller-facing key, and tearing the surface down is
-    /// the manager's job.
+    /// Moves backend events into the caller-facing queue; a backend `Closed` is
+    /// translated to the caller's key and tears the surface down.
     fn drain_backend_events(&mut self) {
         for event in self.backend.events() {
             match event {
                 WebViewEvent::Closed { id, .. } => {
-                    if let Some(index) = self.surfaces.iter().position(|surface| surface.id == id)
-                    {
+                    if let Some(index) = self.surfaces.iter().position(|surface| surface.id == id) {
                         self.remove_surface(index);
                     }
-                    // A Closed for a surface already dropped is stale.
                 }
                 event => self.events.push(event),
             }
@@ -602,10 +528,8 @@ impl WebViews {
         self.backend.present(surface.id, mode)
     }
 
-    /// Once per frame: the live placements, the viewport clip and the GPUI
-    /// overlay rects. Forwards only changes; applies the overlay and teardown
-    /// policy. The backend must have been `attach`ed by the caller's paint
-    /// path before the first activation.
+    /// Once per frame: placements, viewport clip, overlays. Forwards changes and
+    /// applies the overlay/teardown policy. The backend must be attached first.
     pub fn frame(
         &mut self,
         live: &[(u64, Placement)],
@@ -615,8 +539,7 @@ impl WebViews {
         self.frame_serial += 1;
         self.drain_backend_events();
 
-        // Teardown first, so an engine freed this frame can be reused by an
-        // activation later in the same frame's input handling.
+        // Teardown first, so a freed engine can be reused within the same frame.
         let mut index = 0;
         while index < self.surfaces.len() {
             let surface = &self.surfaces[index];
@@ -632,9 +555,7 @@ impl WebViews {
             index += 1;
         }
 
-        // Imported dma-buf textures live exactly as long as their surface;
-        // dropping the handles here lets the renderer release the GPU textures
-        // (and their imported memory) on its next frame.
+        // Textures live as long as their surface; dropping the handles frees them.
         let live_ids: Vec<SurfaceId> = self.surfaces.iter().map(|surface| surface.id).collect();
         self.dmabuf.retain(&live_ids);
 
@@ -644,8 +565,7 @@ impl WebViews {
                 continue;
             };
             surface.last_seen = serial;
-            // Defensive clamp: the caller computes the clip from the same
-            // viewport, but a stale placement must never draw outside it.
+            // Defensive clamp: a stale placement must never draw outside the viewport.
             let mut effective = *placement;
             effective.clip = effective.clip.intersect(&viewport);
             if effective.clip.size.width <= Pixels::ZERO
@@ -659,8 +579,7 @@ impl WebViews {
             match (intersects, self.config.on_overlay) {
                 (false, _) => effective.overlay = false,
                 (true, OverlayBehavior::Lower) => {
-                    // The backend lowers the surface below GPUI where it can;
-                    // a backend that cannot must hide it instead.
+                    // The backend lowers where it can, hides where it cannot.
                     effective.overlay = true;
                 }
                 (true, OverlayBehavior::Freeze) => {
@@ -718,8 +637,7 @@ mod tests {
         Bounds::new(point(px(0.), px(0.)), size(px(800.), px(600.)))
     }
 
-    /// The tests drive the manager with a window-free mock: the backend trait
-    /// is stubbed, so no window is needed.
+    /// Tests drive the manager with a window-free mock backend.
     fn manager(mock: MockBackend, config: Config) -> WebViews {
         WebViews::new(mock, config)
     }
@@ -745,7 +663,6 @@ mod tests {
         let recorder = mock.clone();
         let mut webviews = manager(mock, Config::default());
         let id = webviews.activate(1, spec("a")).expect("activate");
-        // Fully outside the viewport: `visible` is false.
         let mut outside = placement(0.);
         outside.visible = false;
         webviews.frame(&[(1u64, outside)], viewport(), &[]);
@@ -774,7 +691,10 @@ mod tests {
         lower.frame(&[(1u64, placement(0.))], viewport(), &[overlay]);
         let placed = recorder.placed();
         assert_eq!(placed.len(), 1);
-        assert!(placed[0].1.overlay && placed[0].1.visible, "lowered, still visible");
+        assert!(
+            placed[0].1.overlay && placed[0].1.visible,
+            "lowered, still visible"
+        );
 
         let mock = MockBackend::new();
         let recorder = mock.clone();
@@ -804,10 +724,7 @@ mod tests {
         webviews.deactivate(7);
         assert_eq!(webviews.live_count(), 0);
         assert_eq!(recorder.destroyed(), vec![id]);
-        assert_eq!(
-            webviews.events(),
-            vec![WebViewEvent::Closed { id, key: 7 }]
-        );
+        assert_eq!(webviews.events(), vec![WebViewEvent::Closed { id, key: 7 }]);
     }
 
     #[test]
@@ -841,7 +758,13 @@ mod tests {
     fn capacity_two_keeps_both_and_evicts_the_least_recent() {
         let mock = MockBackend::new();
         let recorder = mock.clone();
-        let mut webviews = manager(mock, Config { capacity: 2, ..Config::default() });
+        let mut webviews = manager(
+            mock,
+            Config {
+                capacity: 2,
+                ..Config::default()
+            },
+        );
         webviews.activate(1, spec("a")).expect("a");
         webviews.activate(2, spec("b")).expect("b");
         assert_eq!(recorder.created().len(), 2);
@@ -851,7 +774,6 @@ mod tests {
         assert_eq!(recorder.navigated().len(), 1);
         assert!(webviews.is_active(3));
         assert_eq!(webviews.live_count(), 2);
-        // The first surface (never placed) was the least recent.
         assert!(!webviews.is_active(1));
         assert!(webviews.surface_id(3) == Some(third));
     }
@@ -868,7 +790,6 @@ mod tests {
         );
         assert_eq!(webviews.activate(1, bad), Err(Error::Unsupported));
         assert!(recorder.created().is_empty());
-        // Local sources need a scheme loader: the unsupported mock refuses.
         let local = SurfaceSpec::new(
             Source::Local {
                 scheme: "nn-clip",
@@ -906,8 +827,14 @@ mod tests {
             },
             pressed,
         };
-        webviews.input(1, crate::spec::WebInputEvent::PointerMotion { x: 1.0, y: 2.0 });
-        webviews.input(1, crate::spec::WebInputEvent::PointerEnter { x: 1.0, y: 2.0 });
+        webviews.input(
+            1,
+            crate::spec::WebInputEvent::PointerMotion { x: 1.0, y: 2.0 },
+        );
+        webviews.input(
+            1,
+            crate::spec::WebInputEvent::PointerEnter { x: 1.0, y: 2.0 },
+        );
         webviews.input(1, crate::spec::WebInputEvent::PointerLeave);
         webviews.input(1, key(true));
         assert_eq!(recorder.inputs().len(), 3, "keys wait for keyboard focus");
@@ -915,7 +842,11 @@ mod tests {
         webviews.set_focus(1, true);
         webviews.input(1, key(true));
         webviews.input(1, key(false));
-        assert_eq!(recorder.inputs().len(), 5, "focused keys pass straight through");
+        assert_eq!(
+            recorder.inputs().len(),
+            5,
+            "focused keys pass straight through"
+        );
     }
 
     #[test]
@@ -924,16 +855,11 @@ mod tests {
         let recorder = mock.clone();
         let mut webviews = manager(mock, Config::default());
         let id = webviews.activate(9, spec("a")).expect("activate");
-        // A backend reports the engine going away (`window.close()`, a dead
-        // surface). It only knows the id; the manager fills in the key.
+        // The backend reports the id only; the manager fills in the key.
         recorder.send(WebViewEvent::Closed { id, key: 0 });
-        assert_eq!(
-            webviews.events(),
-            vec![WebViewEvent::Closed { id, key: 9 }]
-        );
+        assert_eq!(webviews.events(), vec![WebViewEvent::Closed { id, key: 9 }]);
         assert_eq!(webviews.live_count(), 0);
         assert_eq!(recorder.destroyed(), vec![id]);
-        // A stale id is ignored, not an error.
         recorder.send(WebViewEvent::Closed { id, key: 0 });
         assert!(webviews.events().is_empty());
     }

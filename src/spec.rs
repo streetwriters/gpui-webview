@@ -1,24 +1,20 @@
 //! What a live surface shows and how it may behave (EMBEDS.md §8).
 //!
-//! The crate enforces the [`Policy`] it is handed; it never decides policy.
-//! "Clips run no scripts, embeds run the provider's" is the caller's rule.
+//! The crate enforces the [`Policy`] it is handed; the caller decides it.
 
 use gpui_kit::{Bounds, Pixels, SharedString, px};
 
-/// An opaque live-surface handle, minted by the manager. A backend never mints
-/// one and never interprets one; the caller only ever passes it back.
+/// An opaque live-surface handle; the manager mints it, everyone else passes it back.
 pub type SurfaceId = u64;
 
 /// What a surface shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
-    /// A remote page (`embed`). The caller has already validated the scheme.
+    /// A remote page; the caller has validated the scheme.
     Url(String),
-    /// Inline HTML (`Source::Html`): the small-clip fallback. `base` is the
-    /// `<base href>` the host wants navigation resolved against.
+    /// Inline HTML: the small-clip fallback. `base` is the `<base href>`.
     Html { html: String, base: Option<String> },
-    /// Host-provided local content streamed through a [`SchemeLoader`]
-    /// (a multi-MB web clip). The crate never sees the bytes.
+    /// Host-provided local content streamed through a [`SchemeLoader`].
     ///
     /// [`SchemeLoader`]: crate::SchemeLoader
     Local { scheme: &'static str, path: String },
@@ -31,97 +27,67 @@ impl Source {
     }
 }
 
-/// How the engine's storage is scoped. A clip is `Ephemeral`; an embed shares
-/// the host's cookie jar.
+/// How the engine's storage is scoped.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Storage {
-    /// No persistence: a fresh, non-persistent data store.
+    /// No persistence: a fresh data store.
     #[default]
     Ephemeral,
-    /// The platform's normal store (cookies, localStorage).
     Shared,
 }
 
 /// What happens when the page navigates somewhere (a link, a redirect, JS).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Navigation {
-    /// Let the engine navigate inside the surface.
     #[default]
     Allow,
     /// Refuse the navigation and ask the host to open it externally
     /// (`WebViewEvent::OpenExternal`). What a clip's links do.
     OpenExternal,
-    /// Refuse silently.
     Block,
 }
 
-/// What the engine's *own* context menu (right click) may contain. A **page's**
-/// menu — a `contextmenu` handler, YouTube's and Vimeo's — is page content and
-/// is never affected by this; this is only the menu the engine would show
-/// itself (EMBEDS.md §5).
+/// What the engine's *own* context menu may contain (EMBEDS.md §5). A page's own
+/// menu is page content and is never affected.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ContextMenu {
-    /// Nothing: the engine's menu never appears.
+    /// Nothing: the menu never appears.
     Off,
-    /// The engine's menu minus what this crate cannot honour: no downloads or
-    /// "open in new window" (a note shows no engine windows), no engine
-    /// fullscreen unless [`Engine::fullscreen`] is on, and no "Inspect Element"
-    /// unless [`Engine::devtools`] is on. Everything else stays, page
-    /// navigation included — on a page that offers nothing else, Back/Forward/
-    /// Stop/Reload *are* the menu, and dropping them would leave a right click
-    /// with nothing to show.
+    /// The engine's menu minus what this crate cannot honour: no downloads or new
+    /// windows, no engine fullscreen, no "Inspect Element" without
+    /// [`Engine::devtools`]. Navigation stays: on a bare page it *is* the menu.
     #[default]
     Trimmed,
-    /// The engine's menu, untouched.
-    Engine,
 }
 
-/// What the *engine* exposes beyond the page itself (EMBEDS.md §5). A note
-/// shows a page, not a browser: everything here is off in the product, and a
-/// backend turns on exactly what it is asked for.
-///
-/// These are engine features, not content permissions — a page cannot ask for
-/// them and a sandbox attribute cannot express them, so they are enforced at
-/// the view (WebKitGTK settings, `WKWebView` preferences). The wasm target is
-/// an `iframe` inside the host's browser: there, the browser owns all of this
-/// and the flags are inert.
+/// What the *engine* exposes beyond the page (EMBEDS.md §5); everything is off
+/// in the product. These are engine features, not content permissions: a backend
+/// enforces them at the view. The wasm `iframe` has no say either way.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Engine {
-    /// Developer extras: the inspector, and the "Inspect Element" item in the
-    /// engine's own context menu. `GPUI_WEBVIEW_DEVTOOLS=1` forces it on for
-    /// the nested Linux backend while debugging.
+    /// Developer extras: the inspector and the "Inspect Element" menu item.
+    /// `GPUI_WEBVIEW_DEVTOOLS=1` forces it on for the nested backend.
     pub devtools: bool,
-    /// What the engine's own context menu (Back, Reload, Save Page As,
-    /// Inspect…) may contain; trimmed by default, see [`ContextMenu`].
+    /// What the engine's own context menu may contain; see [`ContextMenu`].
     pub context_menu: ContextMenu,
-    /// Windows the page opens itself (`window.open`, and `target=_blank` links
-    /// the host does not claim): off, so the host decides where a navigation
-    /// goes ([`Policy::navigation`]).
+    /// Windows the page opens itself; off, so [`Policy::navigation`] decides.
     pub popups: bool,
-    /// The engine's fullscreen API. Off: the request is intercepted and
-    /// reported to the host (`WebViewEvent::FullscreenRequested`), which
-    /// presents it itself — that is what keeps the page inside the editor's
-    /// own chrome. On: the engine is allowed to try its own fullscreen.
-    pub fullscreen: bool,
     /// `getUserMedia` and WebRTC: camera, microphone, peer connections.
     pub media_stream: bool,
 }
 
 impl Default for Engine {
-    /// What an embed needs: none of it.
     fn default() -> Self {
         Self {
             devtools: false,
             context_menu: ContextMenu::default(),
             popups: false,
-            fullscreen: false,
             media_stream: false,
         }
     }
 }
 
-/// What the engine is allowed to do. The caller picks these values; the crate
-/// maps them to each backend and enforces them there.
+/// What the engine may do; each backend enforces it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     /// Whether the page may run JavaScript.
@@ -130,13 +96,11 @@ pub struct Policy {
     pub same_origin: bool,
     /// Feature-policy allow-list (the product's YouTube list). Empty = none.
     pub allow: Vec<&'static str>,
-    /// The `Referer` to send (the desktop's `corsHost` origin). `None` = the
-    /// backend default.
+    /// The `Referer` to send (the desktop's `corsHost` origin); `None` = backend default.
     pub referrer: Option<String>,
     pub storage: Storage,
     pub navigation: Navigation,
-    /// Engine-level toggles (devtools, the engine's own menus, fullscreen…).
-    /// All off by default; see [`Engine`].
+    /// Engine-level toggles; all off by default. See [`Engine`].
     pub engine: Engine,
 }
 
@@ -147,8 +111,7 @@ impl Default for Policy {
 }
 
 impl Policy {
-    /// No scripts, no same-origin, no storage, external navigation: a saved web
-    /// clip (EMBEDS.md §5).
+    /// The saved-web-clip policy: no scripts, no same-origin, no storage (EMBEDS.md §5).
     pub fn strict() -> Self {
         Self {
             scripts: false,
@@ -182,7 +145,7 @@ impl Policy {
         }
     }
 
-    /// The product's `sandbox.ts` feature list, as `allow` entries.
+    /// The product's `sandbox.ts` feature list.
     pub fn sandbox_features(&self) -> Vec<&'static str> {
         let mut features = Vec::new();
         if self.scripts {
@@ -191,25 +154,17 @@ impl Policy {
         if self.same_origin {
             features.push("allow-same-origin");
         }
-        features.extend([
-            "allow-popups",
-            "allow-popups-to-escape-sandbox",
-        ]);
+        features.extend(["allow-popups", "allow-popups-to-escape-sandbox"]);
         features
     }
 }
 
-/// One surface's content and policy.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceSpec {
     pub source: Source,
     pub policy: Policy,
-    /// The a11y label / window title.
     pub title: SharedString,
-    /// The initial logical size in pixels (the block's measured size). The
-    /// nested Linux compositor configures its client to exactly this, so the
-    /// page's layout matches the poster's; child-view backends size the view
-    /// from `Placement` instead.
+    /// The initial logical size; the nested compositor configures its client to it.
     pub size: (u32, u32),
 }
 
@@ -223,8 +178,7 @@ impl SurfaceSpec {
         }
     }
 
-    /// Sets the initial logical size (builder form, so existing call sites
-    /// stay readable).
+    /// Sets the initial logical size.
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
         self.size = (width.max(1), height.max(1));
         self
@@ -234,16 +188,14 @@ impl SurfaceSpec {
 /// Where a live surface wants to be, in window coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
-    /// The full block rect. The surface keeps this size; clipping the *view*
-    /// must never relayout the page (EMBEDS.md §8).
+    /// The full block rect; the surface keeps this size, so clipping never
+    /// relayouts the page (EMBEDS.md §8).
     pub rect: Bounds<Pixels>,
-    /// The visible region: the viewport (or the block's visible part) minus any
-    /// GPUI overlay the surface must not draw over.
+    /// The visible region: the viewport minus any overlay the surface must not cover.
     pub clip: Bounds<Pixels>,
     /// Whether the surface should be shown at all this frame.
     pub visible: bool,
-    /// A GPUI overlay intersects the surface: lower it if the backend can,
-    /// hide it if it cannot (`Config::on_overlay`).
+    /// A GPUI overlay intersects the surface; `Config::on_overlay` decides.
     pub overlay: bool,
 }
 
@@ -269,38 +221,31 @@ impl Placement {
     }
 }
 
-/// What to do when a GPUI overlay (menu, find bar, IME candidates, drag)
-/// intersects a live surface.
+/// What to do when a GPUI overlay intersects a live surface.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OverlayBehavior {
-    /// Ask the backend to lower the surface below GPUI (web z-index flip, the
-    /// compositor `place_below` path): the page stays live and visible.
+    /// Lower the surface below GPUI: the page stays live and visible.
     #[default]
     Lower,
-    /// Hide the surface and let the app paint its poster: frame-exact, at the
-    /// cost of a frozen page.
+    /// Hide the surface and paint the poster: frame-exact, but frozen.
     Freeze,
 }
 
 /// How a surface is presented.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Presentation {
-    /// In the editor, at its block's rect.
     #[default]
     Inline,
-    /// A separate window or sheet.
     Window,
-    /// Fullscreen (a special window).
     Fullscreen,
 }
 
-/// Manager configuration. The engine cost is per *live* engine, so the default
-/// is one.
+/// Manager configuration.
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
-    /// Live engines kept at once. Default 1; 2 is the practical desktop max.
+    /// Live engines kept at once (default 1; 2 is the practical desktop max).
     pub capacity: usize,
-    /// What the manager does when a GPUI overlay intersects a surface.
+    /// What to do when a GPUI overlay intersects a surface.
     pub on_overlay: OverlayBehavior,
 }
 
@@ -313,28 +258,21 @@ impl Default for Config {
     }
 }
 
-/// Why a surface (or the whole backend) is unavailable. Never a panic: the app
-/// always has the poster + `openUrl` fallback (EMBEDS.md §8).
+/// Why a surface or backend is unavailable; never a panic (EMBEDS.md §8).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// This target, session or build cannot host a surface.
     Unsupported,
-    /// The platform refused the operation.
     Platform(String),
-    /// The content failed to load.
     Load(String),
 }
 
-/// A decoded frame a **self-compositing** backend asks the app to paint — the
-/// nested Linux compositor. Child-view backends (macOS, the wasm iframe)
-/// composite through the platform and return `None`.
+/// A decoded frame a self-compositing backend (the nested compositor) asks the
+/// app to paint; child-view backends return `None`.
 #[derive(Clone)]
 pub struct SurfaceFrame {
-    /// What the client committed: CPU pixels (`wl_shm`) or a dma-buf the app
-    /// imports into a GPU texture.
+    /// CPU pixels (`wl_shm`) or a dma-buf the app imports into a GPU texture.
     pub content: SurfaceContent,
-    /// The committed logical size (buffer size divided by the output scale),
-    /// for placement maths.
+    /// The committed logical size, for placement maths.
     pub size: (u32, u32),
 }
 
@@ -351,17 +289,16 @@ impl SurfaceFrame {
     pub fn image(&self) -> Option<&std::sync::Arc<gpui_kit::RenderImage>> {
         match &self.content {
             SurfaceContent::Image(image) => Some(image),
-            #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+            #[cfg(dmabuf)]
             SurfaceContent::Dmabuf(_) => None,
         }
     }
 
-    /// Whether two frames are the same commit; a new client commit always
-    /// differs, which is what triggers a repaint.
+    /// Whether two frames are the same commit (a new commit triggers a repaint).
     pub fn same_as(&self, other: &Self) -> bool {
         match (&self.content, &other.content) {
             (SurfaceContent::Image(a), SurfaceContent::Image(b)) => a.id == b.id,
-            #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+            #[cfg(dmabuf)]
             (SurfaceContent::Dmabuf(a), SurfaceContent::Dmabuf(b)) => a.sequence == b.sequence,
             #[allow(unreachable_patterns)]
             _ => false,
@@ -378,36 +315,26 @@ impl std::fmt::Debug for SurfaceFrame {
     }
 }
 
-/// The content of a committed frame.
 #[derive(Clone, Debug)]
 pub enum SurfaceContent {
-    /// Pixels copied on the CPU (the `wl_shm` path), in GPUI's BGRA
-    /// `RenderImage` form.
+    /// Pixels copied on the CPU (the `wl_shm` path), in GPUI's BGRA form.
     Image(std::sync::Arc<gpui_kit::RenderImage>),
-    /// A dma-buf the app imports into a GPU texture through the window (the
-    /// `linux-dmabuf` path). The planes' fds stay open until the frame (and
-    /// every clone of it) is dropped.
-    #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+    /// A dma-buf the app imports into a GPU texture. Its fds stay open until the
+    /// last clone drops.
+    #[cfg(dmabuf)]
     Dmabuf(DmaBufFrame),
 }
 
-/// A committed dma-buf, ready to import. Kept as a plain descriptor (owned
-/// fds, no smithay types) so the app can import it wherever it has a window.
-///
-/// Only built for the Linux dma-buf path: the descriptor owns file
-/// descriptors (`std::os::fd`), which do not exist on wasm or Windows.
-#[cfg(all(target_os = "linux", feature = "dma-buf"))]
+/// A committed dma-buf, ready to import: a plain descriptor (owned fds, no
+/// smithay types). Linux + `dma-buf` only.
+#[cfg(dmabuf)]
 #[derive(Clone, Debug)]
 pub struct DmaBufFrame {
-    /// The *compositor's* per-buffer generation, never reused for a recycled
-    /// client id. The app's import cache is keyed by it.
+    /// The compositor's per-buffer generation (the import cache key) (T10).
     pub buffer_id: u64,
-    /// Monotonic per-commit sequence; two frames with the same sequence are
-    /// the same commit.
+    /// Monotonic per-commit sequence.
     pub sequence: u64,
-    /// Buffer width in pixels.
     pub width: u32,
-    /// Buffer height in pixels.
     pub height: u32,
     /// The buffer's DRM fourcc.
     pub fourcc: u32,
@@ -418,23 +345,18 @@ pub struct DmaBufFrame {
 }
 
 /// One plane of a [`DmaBufFrame`], owning its file descriptor.
-#[cfg(all(target_os = "linux", feature = "dma-buf"))]
+#[cfg(dmabuf)]
 #[derive(Clone, Debug)]
 pub struct DmaBufPlane {
-    /// The plane's fd. `Arc` so a frame stays cheap to clone; closed when the
-    /// last clone drops.
+    /// The plane's fd; `Arc` so a frame clones cheaply, closed with the last clone.
     pub fd: std::sync::Arc<std::os::fd::OwnedFd>,
-    /// Offset into the plane, in bytes.
     pub offset: u32,
     /// Row stride, in bytes.
     pub stride: u32,
 }
 
-/// A native popup above a live surface: WebKit's context menu, a `<select>`
-/// dropdown, a date picker. The client commits it as its own surface (an
-/// `xdg_popup`, so shm or dma-buf like the page) and the app paints it above
-/// the page's frame. Pointer input over it is routed to it by the compositor,
-/// so the app only has to draw it.
+/// A native popup above a live surface (WebKit's context menu, a `<select>`
+/// dropdown). The client commits it like the page; the app paints it on top.
 #[derive(Clone)]
 pub struct PopupFrame {
     /// Stable while the popup lives; keys its dma-buf import cache slot.
@@ -446,8 +368,7 @@ pub struct PopupFrame {
 }
 
 impl PopupFrame {
-    /// Whether two popup states are the same popup, at the same place, showing
-    /// the same commit — so the app can skip a repaint.
+    /// Whether two popup states are the same popup, place and commit.
     pub fn same_as(&self, other: &Self) -> bool {
         self.id == other.id && self.position == other.position && self.frame.same_as(&other.frame)
     }
@@ -463,8 +384,7 @@ impl std::fmt::Debug for PopupFrame {
     }
 }
 
-/// A pointer button a live page can receive. The spec stays platform-neutral;
-/// the nested backend translates the variants to Linux `BTN_*` codes.
+/// A pointer button a live page can receive; the backend maps it to its own code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerButton {
     Left,
@@ -474,55 +394,50 @@ pub enum PointerButton {
     Forward,
 }
 
-/// One input event forwarded to a live surface (EMBEDS.md §10.3: the nested
-/// compositor synthesizes `wl_seat` events from the app's own input). Only
-/// self-compositing backends consume these; native child views and DOM
-/// iframes already receive the platform's events themselves.
+/// One input event forwarded to a live surface (EMBEDS.md §10.3). Only
+/// self-compositing backends consume these; child views see platform events.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WebInputEvent {
-    /// Pointer moved, in surface-local logical pixels.
-    PointerMotion { x: f64, y: f64 },
-    /// The pointer entered the surface's rectangle at `(x, y)` surface-local.
-    /// Enter is explicit so hover starts even when no motion follows (the
-    /// pointer can arrive from a popup or another window).
-    PointerEnter { x: f64, y: f64 },
-    /// The pointer left the surface's rectangle (window-level hover end). The
-    /// nested compositor releases the protocol pointer focus, so the page sees
-    /// `mouseleave` and its hover/cursor state stops sticking.
+    PointerMotion {
+        x: f64,
+        y: f64,
+    },
+    /// The pointer entered the surface's rect; explicit so hover starts without motion.
+    PointerEnter {
+        x: f64,
+        y: f64,
+    },
+    /// The pointer left the surface's rect; the compositor releases the pointer focus.
     PointerLeave,
-    /// A pointer button press/release. `button` is the platform-neutral
-    /// [`PointerButton`]; the backend maps it to its own code.
+    /// A pointer button press/release ([`PointerButton`]; the backend maps it).
     PointerButton {
         x: f64,
         y: f64,
         button: PointerButton,
         pressed: bool,
     },
-    /// A scroll axis update at `(x, y)` surface-local, in GPUI's delta
-    /// convention (positive = up/left, one wheel tick = 60 units). The backend
-    /// flips the sign and maps the units to the platform's (the nested
-    /// compositor scales to GDK/Wayland's libinput axis units).
+    /// A scroll axis update at `(x, y)`, in GPUI's convention (positive = up/left,
+    /// one tick = 60 units). The backend flips sign and maps units (T12).
     PointerAxis {
         x: f64,
         y: f64,
         dx: f64,
         dy: f64,
     },
-    /// A key press/release, in GPUI's own keystroke form. The backend maps it
-    /// to the keycodes of the keymap it sent to clients.
+    /// A key press/release; the backend maps it to the keymap it sent the client.
     Key {
         keystroke: gpui_kit::Keystroke,
         pressed: bool,
     },
-    /// The held modifier set changed (a Shift/Ctrl/Alt/Super press or release
-    /// without another key). The backend presses/releases the protocol
-    /// modifier keys to match, so a held modifier stays down across keys.
-    Modifiers { modifiers: gpui_kit::Modifiers },
+    /// The held modifier set changed without another key; the backend matches the
+    /// protocol modifier keys (T9).
+    Modifiers {
+        modifiers: gpui_kit::Modifiers,
+    },
 }
 
 impl WebInputEvent {
-    /// The pointer position of the event, when it carries one. The nested
-    /// compositor hit-tests popups with it before routing to the page.
+    /// The pointer position, when the event carries one (popup hit-testing (T25)).
     #[allow(dead_code)] // Only self-compositing backends have a hit-test.
     pub(crate) fn pointer_position(&self) -> Option<(f64, f64)> {
         match self {
@@ -534,10 +449,8 @@ impl WebInputEvent {
         }
     }
 
-    /// Whether the event is routed by pointer position rather than by keyboard
-    /// focus: motion, buttons, the wheel and enter/leave. A page is an iframe:
-    /// hovering and scrolling it must work before it has been clicked, and
-    /// leaving it must always be delivered.
+    /// Whether the event routes by pointer position rather than keyboard focus
+    /// (motion, buttons, wheel, enter/leave) (T25).
     pub(crate) fn is_positional(&self) -> bool {
         matches!(
             self,
@@ -550,25 +463,35 @@ impl WebInputEvent {
     }
 }
 
-/// What the manager/backends report back to the app (EMBEDS.md §8), drained in
-/// order with `WebViews::events`.
+/// What the manager and backends report back (EMBEDS.md §8); drained in order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WebViewEvent {
-    /// A navigation was refused by policy and should open in the host's
-    /// browser instead.
-    OpenExternal { id: SurfaceId, url: String },
-    /// The page's title changed (a clip's saved title is empty until it loads).
-    TitleChanged { id: SurfaceId, title: String },
+    /// A navigation was refused and should open in the host's browser.
+    OpenExternal {
+        id: SurfaceId,
+        url: String,
+    },
+    TitleChanged {
+        id: SurfaceId,
+        title: String,
+    },
     /// The engine failed to load the current content.
-    LoadFailed { id: SurfaceId, error: Error },
-    /// The page asked for fullscreen (or left it). The app decides whether to
-    /// honour it with `present`.
-    FullscreenRequested { id: SurfaceId, on: bool },
-    /// The engine's process crashed.
-    Crashed { id: SurfaceId },
-    /// The surface was torn down (`deactivate`, scroll-out or eviction). The
-    /// app's `key` no longer maps to a live surface.
-    Closed { id: SurfaceId, key: u64 },
+    LoadFailed {
+        id: SurfaceId,
+        error: Error,
+    },
+    /// The page asked for fullscreen (or left it); the app decides via `present`.
+    FullscreenRequested {
+        id: SurfaceId,
+        on: bool,
+    },
+    Crashed {
+        id: SurfaceId,
+    },
+    Closed {
+        id: SurfaceId,
+        key: u64,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -596,18 +519,19 @@ mod tests {
         assert!(!policy.scripts && !policy.same_origin);
         assert_eq!(policy.storage, Storage::Ephemeral);
         assert_eq!(policy.navigation, Navigation::OpenExternal);
-        assert_eq!(policy.sandbox_features(), vec!["allow-popups", "allow-popups-to-escape-sandbox"]);
+        assert_eq!(
+            policy.sandbox_features(),
+            vec!["allow-popups", "allow-popups-to-escape-sandbox"]
+        );
     }
 
-    /// A note shows a page, not a browser: every engine feature is off in both
-    /// policies the editor ships, and turning one on is the caller's decision.
+    /// Every engine feature is off in both shipped policies by default.
     #[test]
     fn engine_features_are_off_by_default() {
         let engine = Engine::default();
         assert!(!engine.devtools);
         assert_eq!(engine.context_menu, ContextMenu::Trimmed);
         assert!(!engine.popups);
-        assert!(!engine.fullscreen);
         assert!(!engine.media_stream);
         for policy in [Policy::strict(), Policy::media()] {
             assert_eq!(policy.engine, Engine::default());
@@ -615,7 +539,11 @@ mod tests {
 
         let mut with_devtools = Policy::strict();
         with_devtools.engine.devtools = true;
-        assert_ne!(with_devtools, Policy::strict(), "the toggle is part of the policy");
+        assert_ne!(
+            with_devtools,
+            Policy::strict(),
+            "the toggle is part of the policy"
+        );
     }
 
     #[test]
@@ -637,7 +565,10 @@ mod tests {
         assert!(placement.visible);
         assert_eq!(placement.clip.size.height, px(50.));
 
-        let off = Placement::clipped_to(rect, Bounds::new(point(px(0.), px(200.)), size(px(100.), px(100.))));
+        let off = Placement::clipped_to(
+            rect,
+            Bounds::new(point(px(0.), px(200.)), size(px(100.), px(100.))),
+        );
         assert!(!off.visible);
     }
 

@@ -1,15 +1,50 @@
-//! Frame transport: `wl_shm` copies, dma-buf descriptors, held buffers and
-//! the per-buffer identity the app's texture cache keys on.
+//! Frame transport: `wl_shm` copies, dma-buf descriptors, held buffers, per-buffer identity.
 
-use super::*;
-use crate::debug::debug_log;
+#[cfg(dmabuf)]
+use crate::spec::DmaBufFrame;
+#[cfg(dmabuf)]
+use crate::spec::DmaBufPlane;
+#[cfg(dmabuf)]
+use crate::spec::SurfaceContent;
+use crate::spec::SurfaceFrame;
+use crate::spec::SurfaceId;
+#[cfg(dmabuf)]
+use smithay::backend::allocator::Format;
+#[cfg(dmabuf)]
+use smithay::backend::allocator::Fourcc;
+#[cfg(dmabuf)]
+use smithay::backend::allocator::Modifier;
+use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+use smithay::reexports::wayland_server::protocol::wl_shm;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::utils::Logical;
+use smithay::utils::Rectangle;
+use smithay::wayland::compositor::BufferAssignment;
+use smithay::wayland::compositor::SurfaceAttributes;
+#[cfg(dmabuf)]
+use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
+#[cfg(dmabuf)]
+use smithay::wayland::dmabuf::DmabufGlobal;
+#[cfg(dmabuf)]
+use smithay::wayland::dmabuf::DmabufState;
+#[cfg(dmabuf)]
+use smithay::wayland::dmabuf::ImportNotifier;
+use smithay::wayland::shell::xdg::SurfaceCachedState;
+use smithay::wayland::shm::{self, ShmHandler, ShmState};
+use std::sync::Arc;
+
 use super::compositor::NestedState;
+#[cfg(dmabuf)]
+use crate::debug::debug_log;
+#[cfg(dmabuf)]
+use smithay::backend::allocator::Buffer as _;
+use smithay::wayland::buffer::BufferHandler;
+#[cfg(dmabuf)]
+use smithay::wayland::dmabuf::DmabufHandler;
+#[cfg(dmabuf)]
+use smithay::wayland::dmabuf::get_dmabuf;
 
-/// A client buffer held back one commit so the app can finish importing the
-/// previous frame: WebKit would otherwise rewrite the pixels under the app's
-/// feet (see `commit`). Dropping or replacing it releases the buffer at the
-/// right moment. The page keeps one per surface (`held_buffers`), a popup one
-/// per popup.
+/// T14: the client buffer held back one commit while the app imports the previous frame.
 #[derive(Default)]
 pub(super) struct HeldBuffer(Option<WlBuffer>);
 
@@ -28,17 +63,14 @@ impl HeldBuffer {
         }
     }
 
-    /// Takes the held buffer for the caller to release (the popup teardown
-    /// releases it through `release_popup_frame`).
+    /// Takes the held buffer for the caller to release.
     pub(super) fn take(&mut self) -> Option<WlBuffer> {
         self.0.take()
     }
 }
 
-/// The content rectangle of a commit, clamped to the buffer: the client's
-/// window geometry (the page content, without decoration shadows), or the
-/// whole buffer when there is none or it is degenerate. `None` when nothing is
-/// left to draw. Shared by the shm and dma-buf paths so they cannot drift.
+/// The content rect of a commit clamped to the buffer: the client's window
+/// geometry when sane, the whole buffer otherwise. Shared by both transports.
 pub(super) fn content_rect(
     geometry: Option<smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
     buffer_width: u32,
@@ -61,9 +93,8 @@ pub(super) fn content_rect(
 }
 
 impl NestedState {
-    /// The app-facing identity of a committed buffer: a generation assigned on
-    /// first sight and never reused. See the `buffer_generations` field.
-    #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+    /// T10: the app-facing identity of a committed buffer, a never-reused generation.
+    #[cfg(dmabuf)]
     pub(super) fn buffer_key(&mut self, buffer: &WlBuffer) -> u64 {
         use smithay::reexports::wayland_server::Resource as _;
         let id = buffer.id().protocol_id() as u64;
@@ -76,37 +107,24 @@ impl NestedState {
         key
     }
 
-
-    /// Enables `linux-dmabuf` with the renderer's exact importable set: the
-    /// device is the render node the imported buffers must come from, and the
-    /// formats are `(fourcc, modifier)` pairs the renderer's Vulkan driver
-    /// verified. Returns whether the global was created.
-    #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+    /// Enables `linux-dmabuf` with the renderer's importable set; returns whether the global was created.
+    #[cfg(dmabuf)]
     pub(super) fn enable_dmabuf(
         &mut self,
         display: &smithay::reexports::wayland_server::DisplayHandle,
         capabilities: gpui_kit::DmaBufCapabilities,
     ) -> bool {
         if self.dmabuf_global.is_some() {
-            // `attach` runs after `new_with_dmabuf` in tests; a second global
-            // would advertise the same formats twice.
+            // `attach` runs after `new_with_dmabuf` in tests; a second global would duplicate it.
             return false;
         }
-        // `GPUI_WEBVIEW_DMABUF_LINEAR=1` advertises only linear buffers. It is
-        // the diagnostic/failsafe path: a linear buffer's layout is trivial to
-        // import, so a machine whose tiled import misbehaves can still run the
-        // GPU path.
+        // `GPUI_WEBVIEW_DMABUF_LINEAR=1`: linear buffers only (diagnostic path).
         let linear_only = std::env::var_os("GPUI_WEBVIEW_DMABUF_LINEAR").is_some();
         let advertised: Vec<(u32, u64)> = capabilities
             .formats
             .iter()
             .filter(|(_, modifier)| !linear_only || *modifier == 0)
-            // XR24's alpha byte is undefined (WebKit writes 0) and the
-            // renderer samples it with premultiplied blending, which would
-            // make an opaque page transparent. Advertise AR24 (and the rest)
-            // only; WebKitGTK picks AR24 without complaint. The shm path
-            // forces the alpha byte itself (`copy_pixels`), the dma-buf path
-            // cannot cheaply, so it is filtered out here.
+            // T5: XR24's alpha is undefined and sampled premultiplied; filter it (shm forces 0xff).
             .filter(|(fourcc, _)| *fourcc != Fourcc::Xrgb8888 as u32)
             .copied()
             .collect();
@@ -150,30 +168,22 @@ impl NestedState {
         true
     }
 
-
-    /// Whether the feedback advertised this `(fourcc, modifier)` pair (which
-    /// means the renderer can import it).
-    #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+    /// Whether the feedback advertised this `(fourcc, modifier)` pair.
+    #[cfg(dmabuf)]
     pub(super) fn dmabuf_format_supported(&self, fourcc: u32, modifier: u64) -> bool {
         self.dmabuf_formats
             .iter()
             .any(|(code, value)| *code == fourcc && *value == modifier)
     }
 
-
-    /// Releases the dma-buf buffer held back for `id`, if any. Called when the
-    /// surface goes away; the steady-state release happens on the next commit.
+    /// Releases the dma-buf held back for `id`, if any (called when the surface goes away).
     pub(super) fn release_held_buffer(&mut self, id: SurfaceId) {
         if let Some(mut held) = self.held_buffers.remove(&id) {
             held.release();
         }
     }
 
-
-    /// Releases a surface's pending frame callbacks. The client loops on
-    /// these, but not at *our* paint rate: it is self-paced and may commit
-    /// while the app is idle. The callback is released as soon as the commit's
-    /// buffer is consumed so the client can reuse or redraw it.
+    /// Releases pending frame callbacks so the client can reuse its buffer (T21: on commit, not present).
     pub(super) fn fire_frame_callbacks(&mut self, surface: &WlSurface) {
         let callbacks: Vec<smithay::reexports::wayland_server::protocol::wl_callback::WlCallback> =
             smithay::wayland::compositor::with_states(surface, |states| {
@@ -186,15 +196,10 @@ impl NestedState {
                     .collect()
             });
         let time = self.now_ms();
-        if !callbacks.is_empty() {
-            debug_log!("commit: fired {} frame callbacks", callbacks.len());
-        }
         for callback in callbacks {
             callback.done(time);
         }
     }
-
-
 }
 
 impl ShmHandler for NestedState {
@@ -203,8 +208,7 @@ impl ShmHandler for NestedState {
     }
 }
 
-
-#[cfg(all(target_os = "linux", feature = "dma-buf"))]
+#[cfg(dmabuf)]
 impl DmabufHandler for NestedState {
     fn dmabuf_state(&mut self) -> &mut DmabufState {
         &mut self.dmabuf_state
@@ -216,9 +220,7 @@ impl DmabufHandler for NestedState {
         dmabuf: smithay::backend::allocator::dmabuf::Dmabuf,
         notifier: ImportNotifier,
     ) {
-        // Accept exactly what the feedback advertised: the renderer proved it
-        // can import those pairs, and a rejected buffer makes WebKitGTK fall
-        // back instead of committing pixels nobody can sample.
+        // Accept exactly what the feedback advertised (T17); anything else makes WebKit fall back.
         let format = dmabuf.format();
         let fourcc = format.code as u32;
         let modifier = u64::from(format.modifier);
@@ -233,35 +235,27 @@ impl DmabufHandler for NestedState {
         }
         if notifier.successful::<NestedState>().is_err() {
             debug_log!("dmabuf: the client went away before the import reply");
-        } else {
-            debug_log!("dmabuf: {:?} modifier {modifier:#x} accepted", format.code);
         }
     }
 }
 
-
-/// The `wl_buffer` lifecycle hook. With the `dma-buf` feature it drops the
-/// buffer's generation, which is what makes a *reused* protocol id get a fresh
-/// import-cache key (see `buffer_key`); shm buffers only need the empty hook.
+/// Drops a destroyed buffer's generation so a reused id gets a fresh key (T10).
 impl BufferHandler for NestedState {
     fn buffer_destroyed(&mut self, buffer: &WlBuffer) {
-        #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+        #[cfg(dmabuf)]
         {
             use smithay::reexports::wayland_server::Resource as _;
             self.buffer_generations
                 .remove(&(buffer.id().protocol_id() as u64));
         }
-        #[cfg(not(all(target_os = "linux", feature = "dma-buf")))]
+        #[cfg(not(dmabuf))]
         let _ = buffer;
     }
 }
 
-
 /// What one commit's buffer means for the compositor.
 pub(super) enum CommittedBuffer {
-    /// A usable new frame. `hold` is the client buffer to keep back one commit
-    /// (dma-buf only — shm pixels are copied, so that buffer is released at
-    /// once).
+    /// A usable new frame; `hold` is the buffer to keep back one commit (dma-buf only).
     New {
         frame: SurfaceFrame,
         hold: Option<WlBuffer>,
@@ -274,10 +268,7 @@ pub(super) enum CommittedBuffer {
     Rejected,
 }
 
-
-/// The content rect a surface commits (`xdg_surface.set_window_geometry`).
-/// `None` for surfaces that never set one (popups, and toplevels before their
-/// first geometry commit).
+/// The content rect a surface commits (`set_window_geometry`); `None` before its first one.
 pub(super) fn content_geometry(surface: &WlSurface) -> Option<Rectangle<i32, Logical>> {
     smithay::wayland::compositor::with_states(surface, |states| {
         states
@@ -288,10 +279,7 @@ pub(super) fn content_geometry(surface: &WlSurface) -> Option<Rectangle<i32, Log
     })
 }
 
-
-/// Takes the committed buffer out of `surface`'s state and turns it into a
-/// frame: a dma-buf descriptor with the buffer held, or copied pixels with the
-/// buffer released. `sequence` identifies the commit for repaint detection.
+/// Turns the committed buffer into a frame: dma-buf with the buffer held, or copied pixels with it released.
 impl NestedState {
     pub(super) fn take_committed(
         &mut self,
@@ -299,7 +287,7 @@ impl NestedState {
         geometry: Option<Rectangle<i32, Logical>>,
         sequence: u64,
     ) -> CommittedBuffer {
-        #[cfg(not(all(target_os = "linux", feature = "dma-buf")))]
+        #[cfg(not(dmabuf))]
         let _ = sequence;
         let assignment = smithay::wayland::compositor::with_states(surface, |states| {
             states
@@ -311,10 +299,9 @@ impl NestedState {
         });
         match assignment {
             Some(BufferAssignment::NewBuffer(buffer)) => {
-                #[cfg(all(target_os = "linux", feature = "dma-buf"))]
+                #[cfg(dmabuf)]
                 if let Some(dmabuf) = get_dmabuf(&buffer).ok().cloned() {
-                    // The app keys its import cache on this generation, not
-                    // the recycled protocol id.
+                    // T10: the import cache keys on this generation, not the recycled protocol id.
                     let key = self.buffer_key(&buffer);
                     return match dmabuf_frame(key, &dmabuf, geometry, sequence) {
                         Some(frame) => CommittedBuffer::New {
@@ -327,9 +314,7 @@ impl NestedState {
                         }
                     };
                 }
-                // Once the pixels are copied the buffer is free for the client
-                // to reuse, which is what keeps WebKit's shm pool flowing (we
-                // never sample it again).
+                // Copied: the buffer is free for the client to reuse.
                 let frame = copy_shm_buffer(&buffer, geometry);
                 buffer.release();
                 match frame {
@@ -343,14 +328,9 @@ impl NestedState {
     }
 }
 
-
-/// Turns a committed dma-buf into a frame the app imports. The plane fds are
-/// duplicated so the compositor can release the client buffer afterwards, and
-/// the pixels are cropped to the client's window geometry exactly like the shm
-/// path. Only single-plane buffers are supported (which is all the feedback
-/// advertises). `key` is the buffer's never-reused generation (see
-/// `NestedState::buffer_key`).
-#[cfg(all(target_os = "linux", feature = "dma-buf"))]
+/// Turns a committed dma-buf into a frame: plane fds duplicated, pixels cropped
+/// to the window geometry like the shm path. `key` is the buffer's generation.
+#[cfg(dmabuf)]
 pub(super) fn dmabuf_frame(
     key: u64,
     dmabuf: &smithay::backend::allocator::dmabuf::Dmabuf,
@@ -370,11 +350,7 @@ pub(super) fn dmabuf_frame(
     let fd = dmabuf.handles().next()?;
     let offset = dmabuf.offsets().next()?;
     let stride = dmabuf.strides().next()?;
-    // The crop below turns `(x0, y0)` into a byte offset, which is only valid
-    // for a linear layout. A tiled modifier's plane describes whole tiles; a
-    // nonzero geometry origin would need a blit, not an offset. The geometry
-    // is `(0, 0)` in practice (`set_decorated(false)`), so this is a guard
-    // that degrades to "keep the last frame" instead of sampling garbage.
+    // Tiled planes describe whole tiles, so a nonzero crop origin would sample garbage.
     if format.modifier != Modifier::Linear && (x0 != 0 || y0 != 0) {
         static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
         if WARNED.set(()).is_ok() {
@@ -385,16 +361,13 @@ pub(super) fn dmabuf_frame(
         }
         return None;
     }
-    // BGRA/XRGB byte order: four bytes per pixel, one row per stride. The
-    // plane's own offset is kept: it is in *bytes* into the fd and may be
-    // nonzero for a sub-allocated buffer (the app's importer applies it to
-    // the Vulkan plane layout).
+    // BGRA byte order, four bytes per pixel, one row per stride. The plane's own
+    // byte offset stays: a sub-allocated buffer can have a nonzero one.
     let cropped_offset = offset
         .checked_add(y0.checked_mul(stride)?)?
         .checked_add(x0.checked_mul(4)?)?;
 
-    // `try_clone_to_owned` duplicates the descriptor and sets close-on-exec,
-    // so no `fcntl`/`from_raw_fd` pair is needed.
+    // `try_clone_to_owned` duplicates the descriptor close-on-exec.
     let fd = fd.as_fd().try_clone_to_owned().ok()?;
 
     Some(SurfaceFrame {
@@ -415,11 +388,8 @@ pub(super) fn dmabuf_frame(
     })
 }
 
-
 /// Copies a committed `wl_shm` buffer into a GPUI frame image, cropped to the
-/// client's window geometry (the content, without decoration shadows).
-/// `ARGB8888`/`XRGB8888` bytes are BGRA in little-endian memory, which is
-/// exactly what `RenderImage` expects, so the rows copy through unchanged.
+/// window geometry; little-endian ARGB/XRGB bytes are already BGRA for `RenderImage`.
 pub(super) fn copy_shm_buffer(
     buffer: &WlBuffer,
     geometry: Option<smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
@@ -431,9 +401,7 @@ pub(super) fn copy_shm_buffer(
     out
 }
 
-
-/// Copies the content rectangle of one buffer into a `RenderImage`. Returns
-/// `None` for a malformed size/stride or a truncated memory map.
+/// Copies the content rect of a buffer into a `RenderImage`; `None` on malformed data.
 pub(super) fn copy_pixels(
     pointer: *const u8,
     length: usize,
@@ -449,9 +417,9 @@ pub(super) fn copy_pixels(
         return None;
     }
 
-    // The content rect, clamped to the buffer. Without a window geometry the
-    // whole buffer is the content.
-    let (x0, y0, width, height) = content_rect(geometry, buffer_width as u32, buffer_height as u32)?;
+    // Without a window geometry the whole buffer is the content.
+    let (x0, y0, width, height) =
+        content_rect(geometry, buffer_width as u32, buffer_height as u32)?;
     let (x0, y0, width, height) = (x0 as usize, y0 as usize, width as usize, height as usize);
 
     let mut pixels = Vec::with_capacity(width * height * 4);
@@ -467,8 +435,7 @@ pub(super) fn copy_pixels(
         let row_bytes = unsafe { std::slice::from_raw_parts(pointer.add(start), width * 4) };
         pixels.extend_from_slice(row_bytes);
     }
-    // XRGB8888 leaves the alpha byte undefined (zero in practice); GPUI blends
-    // with it, so an opaque buffer must become opaque here.
+    // T5: XRGB8888's alpha is undefined; GPUI blends with it, so force opaque here.
     if data.format == wl_shm::Format::Xrgb8888 {
         for alpha in pixels.iter_mut().skip(3).step_by(4) {
             *alpha = 0xff;
