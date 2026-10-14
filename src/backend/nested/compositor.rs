@@ -220,10 +220,8 @@ impl NestedState {
                 *focused = None;
             }
         }
-        let protocol_focused = surface.as_ref().is_some_and(|surface| {
-            self.keyboard.current_focus().as_ref() == Some(surface.wl_surface())
-        });
-        if protocol_focused {
+        // The page or one of its (just dismissed, not yet destroyed) menus.
+        if self.keyboard_block() == Some(id) {
             // A dead surface must not keep the keyboard.
             let keyboard = self.keyboard.clone();
             keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
@@ -562,17 +560,10 @@ fn apply_command(data: &mut CalloopData, command: Command) {
                     keyboard.set_focus(&mut data.state, Some(surface), serial);
                 }
             } else {
-                // Check the protocol focus: the main thread already cleared the shared
-                // flag optimistically, so it cannot say whether to send `wl_keyboard.leave`.
-                let protocol_focus = data
-                    .state
-                    .mapped
-                    .get(&id)
-                    .map(|surface| surface.wl_surface().clone())
-                    .filter(|surface| {
-                        data.state.keyboard.current_focus().as_ref() == Some(surface)
-                    });
-                if protocol_focus.is_some() {
+                // Check the protocol focus (the page or a menu of it): the main
+                // thread already cleared the shared flag optimistically, so it
+                // cannot say whether to send `wl_keyboard.leave`.
+                if data.state.keyboard_block() == Some(id) {
                     keyboard.set_focus(&mut data.state, None, serial);
                     // Focus left the block: an open menu cannot outlive it.
                     data.state.dismiss_popups(id);
@@ -649,8 +640,10 @@ impl CompositorHandler for NestedState {
             && geometry.size.w > 0
             && geometry.size.h > 0
         {
-            self.content_sizes
-                .insert(id, (geometry.size.w, geometry.size.h));
+            let size = (geometry.size.w, geometry.size.h);
+            if self.content_sizes.insert(id, size) != Some(size) {
+                self.reconstrain_popups(id);
+            }
         }
         self.commit_sequence += 1;
         let sequence = self.commit_sequence;
@@ -804,6 +797,7 @@ impl XdgShellHandler for NestedState {
             position,
             size: (geometry.size.w, geometry.size.h),
             mapped: false,
+            grabbing: false,
             held: HeldBuffer::default(),
         });
     }
@@ -812,39 +806,37 @@ impl XdgShellHandler for NestedState {
         &mut self,
         surface: PopupSurface,
         positioner: PositionerState,
-        _token: u32,
+        token: u32,
     ) {
-        // A menu re-anchors on scroll; `send_configure` refuses non-reactive positioners.
+        // A menu re-anchors on scroll. Any positioner may ask: `reactive` only
+        // covers the compositor's own re-constrains (`reconstrain_popups`), so
+        // this answers with `repositioned`, never the reactive-only
+        // `send_configure`.
         let Some(parent) = popup_parent(&surface) else {
             return;
         };
         let Some((_block, origin, geometry)) = popup_geometry(self, &parent, &positioner) else {
             return;
         };
-        surface.with_pending_state(|state| state.geometry = geometry);
-        if let Err(error) = surface.send_configure() {
-            debug_log!("popup reposition refused: {error:?}");
-            return;
-        }
-        let position = (origin.0 + geometry.loc.x, origin.1 + geometry.loc.y);
-        // T40: submenus resolve through the popup's *current* position.
-        if let Some(popup) = self
-            .popups
-            .iter_mut()
-            .find(|popup| popup.surface.wl_surface() == surface.wl_surface())
-        {
-            popup.position = position;
-            popup.size = (geometry.size.w, geometry.size.h);
-        }
+        surface.with_pending_state(|state| {
+            state.positioner = positioner;
+            state.geometry = geometry;
+        });
+        surface.send_repositioned(token);
+        debug_log!("popup repositioned to {geometry:?}");
+        self.place_popup(&surface, origin, geometry);
     }
 
     fn grab(
         &mut self,
-        _surface: PopupSurface,
+        surface: PopupSurface,
         _seat: smithay::reexports::wayland_server::protocol::wl_seat::WlSeat,
         _serial: Serial,
     ) {
-        // A grab says "dismiss me on an outside click"; the press in `apply_input` does it.
+        // A grab says "dismiss me on an outside click" (the press in
+        // `apply_input` does it) and "give me the keyboard": the topmost
+        // grabbing menu holds it, so arrows and Esc reach it directly.
+        self.grab_popup(&surface);
     }
 }
 

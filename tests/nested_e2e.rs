@@ -717,6 +717,81 @@ mod linux {
             self.webviews.deactivate(0);
         }
         /// Activates [`CLIPBOARD_PAGE`] and waits for its script.
+        fn step_menu_keys(&mut self) {
+            // A <select> taller than the page is fitted into it (GTK scrolls the
+            // menu), and the grabbing menu holds the keyboard: arrows choose,
+            // Esc closes.
+            self.activate_page(TALL_SELECT_PAGE, "tall select", tall_colour("ready"));
+            self.focus();
+            let select = (80.0, 32.0);
+            self.click(gpui_webview::PointerButton::Left, select.0, select.1);
+            let popups = wait_for_popups(&mut self.webviews, &self.live, self.viewport, true);
+            let Some(popup) = popups.first().cloned() else {
+                fail("clicking the tall <select> never produced a native popup");
+            };
+            println!(
+                "menu-keys: popup {} at {:?} size {:?}",
+                popup.id, popup.position, popup.frame.size
+            );
+            if popup.position.0 < 0
+                || popup.position.1 < 0
+                || popup.position.0 + popup.frame.size.0 as i32 > self.width as i32
+                || popup.position.1 + popup.frame.size.1 as i32 > self.height as i32
+            {
+                fail("the tall popup overflows the page's rect");
+            }
+            // Down, Enter: another option, chosen by keyboard alone (the menu
+            // opens under the pointer, which highlights an item of its own).
+            for key in ["down", "enter"] {
+                self.key(key, true);
+                self.key(key, false);
+            }
+            let popups = wait_for_popups(&mut self.webviews, &self.live, self.viewport, false);
+            if !popups.is_empty() {
+                fail("Enter on the menu did not close it");
+            }
+            self.expect("menu-keys", "changed", 10, |bytes| {
+                count_rgb(bytes, tall_colour("changed"))
+            });
+            // Reopen; Esc closes without choosing.
+            self.click(gpui_webview::PointerButton::Left, select.0, select.1);
+            let popups = wait_for_popups(&mut self.webviews, &self.live, self.viewport, true);
+            if popups.is_empty() {
+                fail("the tall popup did not reopen for the Esc check");
+            }
+            self.key("escape", true);
+            self.key("escape", false);
+            let popups = wait_for_popups(&mut self.webviews, &self.live, self.viewport, false);
+            if !popups.is_empty() {
+                fail("Esc did not close the menu");
+            }
+            // The keyboard is the page's again.
+            self.key("x", true);
+            self.key("x", false);
+            self.expect("menu-keys", "third", 10, |bytes| {
+                count_rgb(bytes, tall_colour("third"))
+            });
+            println!("menu-keys: fitted, chosen by keys, closed by Esc");
+        }
+        fn activate_page(&mut self, html: &str, label: &str, ready: u32) {
+            let spec = SurfaceSpec::new(
+                Source::Html {
+                    html: html.into(),
+                    base: None,
+                },
+                Policy {
+                    scripts: true,
+                    ..Policy::default()
+                },
+                label,
+            )
+            .with_size(self.width, self.height);
+            self.webviews
+                .activate(0, spec)
+                .unwrap_or_else(|error| fail(&format!("{label} activation failed: {error}")));
+            self.expect(label, "ready", 10, |bytes| count_rgb(bytes, ready));
+            let _ = self.webviews.events();
+        }
         fn activate_clipboard_page(&mut self) {
             let spec = SurfaceSpec::new(
                 Source::Html {
@@ -740,6 +815,30 @@ mod linux {
         }
     }
     use gpui_webview::WebInputEvent;
+    /// The menu-keys step's page: a 40-option `<select>` (taller than the
+    /// page) that recolours the page when an option is chosen, then when a
+    /// key reaches the page once the menu is closed.
+    const TALL_SELECT_PAGE: &str = "<!doctype html><html><body style=\"margin:0;background:#c81e1e\">\
+        <select id=\"tall\" style=\"position:absolute;left:20px;top:20px;width:120px;height:24px\">\
+        </select>\
+        <script>\
+        var b = document.body, tall = document.getElementById('tall');\
+        for (var i = 0; i < 40; i++) { var o = document.createElement('option');\
+        o.textContent = 'option ' + i; tall.appendChild(o); }\
+        tall.addEventListener('change', function(){ b.style.background = '#1ec87f'; });\
+        document.addEventListener('keydown', function(e){\
+        if (e.key === 'x') b.style.background = '#c8c8c8'; });\
+        b.style.background = '#1e7f1e';\
+        </script></body></html>";
+    /// The tall-select page's colours (see [`TALL_SELECT_PAGE`]).
+    fn tall_colour(name: &str) -> u32 {
+        match name {
+            "ready" => 0x1e7f1e,
+            "changed" => 0x1ec87f,
+            "third" => 0xc8c8c8,
+            _ => panic!("unknown tall-select page colour {name}"),
+        }
+    }
     /// The clipboard step's page: a preselected source paragraph and a
     /// textarea that recolours the page by what was pasted into it.
     const CLIPBOARD_PAGE: &str = "<!doctype html><html><body style=\"margin:0;background:#c81e1e\">\
@@ -1156,7 +1255,7 @@ mod linux {
             height,
             html,
         };
-        let steps: [(&str, fn(&mut Harness)); 15] = [
+        let steps: [(&str, fn(&mut Harness)); 16] = [
             ("script", Harness::step_script),
             ("click", Harness::step_click),
             ("key", Harness::step_key),
@@ -1172,6 +1271,7 @@ mod linux {
             ("storage", Harness::step_storage),
             ("clipboard", Harness::step_clipboard),
             ("dnd", Harness::step_dnd),
+            ("menu-keys", Harness::step_menu_keys),
         ];
         let only = std::env::var("E2E_ONLY").ok();
         let mut ran = 0;
