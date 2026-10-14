@@ -34,9 +34,9 @@ use smithay::wayland::shm::{self, ShmHandler, ShmState};
 use std::sync::Arc;
 
 use super::compositor::NestedState;
-use crate::debug::debug_log2;
 #[cfg(dmabuf)]
 use crate::debug::debug_log;
+use crate::debug::debug_log2;
 #[cfg(dmabuf)]
 use smithay::backend::allocator::Buffer as _;
 use smithay::wayland::buffer::BufferHandler;

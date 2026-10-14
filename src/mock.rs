@@ -27,6 +27,7 @@ struct MockState {
     focus: Vec<(SurfaceId, bool)>,
     presented: Vec<(SurfaceId, Presentation)>,
     events: Vec<WebViewEvent>,
+    waker: Option<Arc<dyn Fn() + Send + Sync>>,
     supports_local: bool,
     fail_attach: bool,
     fail_create: bool,
@@ -82,6 +83,21 @@ impl MockBackend {
     pub fn send(&self, event: WebViewEvent) {
         if let Ok(mut state) = self.state.lock() {
             state.events.push(event);
+        }
+    }
+
+    /// Simulates a commit: `frame_image` reports `frame` from now on and the
+    /// waker fires once, exactly as a self-compositing backend publishes.
+    pub fn publish_frame(&self, frame: crate::spec::SurfaceFrame) {
+        let waker = {
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            state.frame_image = Some(frame);
+            state.waker.clone()
+        };
+        if let Some(waker) = waker {
+            waker();
         }
     }
 
@@ -174,6 +190,12 @@ impl WebViewBackend for MockBackend {
 
     fn frame_image(&mut self, _id: SurfaceId) -> Option<crate::spec::SurfaceFrame> {
         self.read(|state| state.frame_image.clone())
+    }
+
+    fn set_waker(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut state) = self.state.lock() {
+            state.waker = Some(waker);
+        }
     }
 
     fn input(&mut self, id: SurfaceId, event: WebInputEvent) {

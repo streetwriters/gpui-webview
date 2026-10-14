@@ -85,11 +85,11 @@ pub trait WebViewBackend: 'static {
         OverlayBehavior::Freeze
     }
 
-    /// T21: whether the app should schedule another animation frame to keep the
-    /// commit → pump → paint loop alive. `false` for an idle surface.
-    fn wants_animation_frame(&mut self) -> bool {
-        false
-    }
+    /// Registers the commit waker: the backend calls it after it publishes a
+    /// new frame for any surface (the compositor thread's "commit"), and the
+    /// app wakes its paint loop off it instead of polling. Coalescing is the
+    /// waker's job; calls can arrive on any thread. Default: no-op.
+    fn set_waker(&mut self, _waker: std::sync::Arc<dyn Fn() + Send + Sync>) {}
 
     /// Sets the streaming source for `Source::Local` (once, before any `create`).
     fn set_scheme_loader(&mut self, _loader: std::sync::Arc<dyn SchemeLoader>) {}

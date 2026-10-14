@@ -163,6 +163,8 @@ impl NestedState {
                     Some(slot) => *slot = shared,
                     None => list.push(shared),
                 }
+                drop(list);
+                self.wake();
             }
             CommittedBuffer::Removed => {
                 let popup = &mut self.popups[index];

@@ -14,6 +14,7 @@
 //! limits.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::{Mutex, MutexGuard};
 
 use crate::spec::{SurfaceFrame, SurfaceId, WebInputEvent, WebViewEvent};
@@ -39,6 +40,9 @@ pub(super) struct Shared {
     /// Keyboard focus: the main thread sets it optimistically, the
     /// compositor is authoritative for the protocol side.
     pub(super) focus: Mutex<Option<SurfaceId>>,
+    /// The commit waker the app installed (`WebViewBackend::set_waker`); the
+    /// compositor calls it after publishing a frame.
+    pub(super) waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// Work for the compositor thread — the only crossing besides the shared maps.

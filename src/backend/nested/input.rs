@@ -184,7 +184,10 @@ pub(super) fn apply_input(state: &mut NestedState, id: SurfaceId, event: WebInpu
             if !is_modifier_key_name(&keystroke.key) {
                 press_missing_modifiers(state, keystroke.modifiers);
             }
-            debug_log2!("input: key {:?} code {code} pressed={pressed}", keystroke.key);
+            debug_log2!(
+                "input: key {:?} code {code} pressed={pressed}",
+                keystroke.key
+            );
             send_key(
                 state,
                 code,

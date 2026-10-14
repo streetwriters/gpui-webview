@@ -171,6 +171,15 @@ impl NestedState {
         self.epoch.elapsed().as_millis() as u32
     }
 
+    /// Wakes the app: a frame was just published. The waker is cloned out of
+    /// the lock first, so a waker that reads shared state cannot deadlock.
+    pub(super) fn wake(&self) {
+        let waker = lock(&self.shared.waker).clone();
+        if let Some(waker) = waker {
+            waker();
+        }
+    }
+
     /// Forgets a toplevel completely. The one teardown path for `Command::Destroy`
     /// and the client's own `destroyed`.
     pub(super) fn forget_toplevel(&mut self, id: SurfaceId) {
@@ -596,10 +605,12 @@ impl CompositorHandler for NestedState {
                     // T14: hold the buffer one commit, or WebKit rewrites pixels the app may still import.
                     self.held_buffers.entry(id).or_default().hold(buffer);
                 }
+                self.wake();
             }
             CommittedBuffer::Removed => {
                 lock(&self.shared.frames).remove(&id);
                 self.release_held_buffer(id);
+                self.wake();
             }
             CommittedBuffer::Unchanged | CommittedBuffer::Rejected => {}
         }

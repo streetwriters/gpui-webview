@@ -479,9 +479,9 @@ impl WebViews {
             .map(|surface| surface.key)
     }
 
-    /// See [`WebViewBackend::wants_animation_frame`].
-    pub fn wants_animation_frame(&mut self) -> bool {
-        self.backend.wants_animation_frame()
+    /// Installs the commit waker (see [`WebViewBackend::set_waker`]).
+    pub fn set_waker(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
+        self.backend.set_waker(waker);
     }
 
     /// Moves backend events into the caller-facing queue; a backend `Closed` is

@@ -42,8 +42,6 @@ pub struct NestedBackend {
     /// One `WebContext` for every `Storage::Shared` surface: one cookie jar.
     shared_context: Option<wry::WebContext>,
     gtk_ready: bool,
-    /// Set by `pump_gtk`; `wants_animation_frame` consumes it.
-    pump_did_work: bool,
 }
 
 /// A live GTK/webview client window on our compositor.
@@ -136,7 +134,6 @@ impl NestedBackend {
             surfaces: HashMap::new(),
             shared_context: None,
             gtk_ready: false,
-            pump_did_work: false,
         };
         let _ = INSTANCE.set(());
         Ok(backend)
@@ -160,14 +157,11 @@ impl NestedBackend {
             // Drain, don't probe `events_pending`: the frame clock and WebKit's
             // IPC run through idle/timeout sources, not GDK events. Bounded in
             // case a source keeps re-arming itself.
-            let mut ran = false;
             for _ in 0..1024 {
                 if !gtk::main_iteration_do(false) {
                     break;
                 }
-                ran = true;
             }
-            self.pump_did_work |= ran;
         }
     }
 }
@@ -437,10 +431,8 @@ impl WebViewBackend for NestedBackend {
         std::mem::take(&mut *lock(&self.shared.events))
     }
 
-    fn wants_animation_frame(&mut self) -> bool {
-        let wants = self.pump_did_work;
-        self.pump_did_work = false;
-        wants
+    fn set_waker(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
+        *lock(&self.shared.waker) = Some(waker);
     }
 
     fn supports_local(&self) -> bool {
