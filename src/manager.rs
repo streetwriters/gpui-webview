@@ -267,6 +267,11 @@ impl WebViews {
         self.surfaces.len()
     }
 
+    /// The keys of every live surface, in activation order.
+    pub fn live_keys(&self) -> Vec<u64> {
+        self.surfaces.iter().map(|surface| surface.key).collect()
+    }
+
     /// The key of the focused surface, if any.
     pub fn focused_key(&self) -> Option<u64> {
         self.surfaces
@@ -350,6 +355,22 @@ impl WebViews {
             .find(|surface| surface.key == old_key)
         {
             surface.key = new_key;
+        }
+    }
+
+    /// Renames every live key at once (an edit moved blocks): `map` gives a
+    /// key's new name, or `None` to tear its surface down. All at once, so a
+    /// shift never collides with a key that has not moved yet.
+    pub fn remap(&mut self, map: impl Fn(u64) -> Option<u64>) {
+        let mut index = 0;
+        while index < self.surfaces.len() {
+            match map(self.surfaces[index].key) {
+                Some(key) => {
+                    self.surfaces[index].key = key;
+                    index += 1;
+                }
+                None => self.remove_surface(index),
+            }
         }
     }
 
@@ -842,6 +863,31 @@ mod tests {
         );
         assert_eq!(webviews.activate(1, bad), Err(Error::Unsupported));
         assert!(recorder.created().is_empty());
+    }
+
+    #[test]
+    fn remap_renames_every_key_at_once_and_drops_the_unmapped() {
+        let mock = MockBackend::new();
+        let recorder = mock.clone();
+        let mut webviews = manager(
+            mock,
+            Config {
+                capacity: 8,
+                ..Config::default()
+            },
+        );
+        webviews.activate(1, spec("a")).expect("activate");
+        webviews.activate(2, spec("b")).expect("activate");
+        webviews.activate(3, spec("c")).expect("activate");
+        // Shift everything from 2 up by one; 1 goes away.
+        webviews.remap(|key| match key {
+            1 => None,
+            key => Some(key + 1),
+        });
+        let mut keys = webviews.live_keys();
+        keys.sort();
+        assert_eq!(keys, vec![3, 4]);
+        assert_eq!(recorder.destroyed().len(), 1);
     }
 
     #[test]
