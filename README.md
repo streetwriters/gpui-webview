@@ -84,8 +84,10 @@ platform-independent core should depend on.
 
 Create → place → clip at the viewport → scroll a clipped surface → overlay a
 menu → teardown → RSS back to baseline → second activation reuses the engine
-(no extra process) at 1x and 2x scale. Security: a clip with `<script>` runs
-nothing, and links leave through `OpenExternal`.
+(no extra process) at 1x. On a 2x host the nested backend still advertises 1x,
+so the page is upscaled (soft) until scale is plumbed through the client.
+Security: a clip with `<script>` runs nothing, and links leave through
+`OpenExternal`.
 
 ## Example
 
