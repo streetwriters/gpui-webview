@@ -63,6 +63,16 @@ fn local_sources_unsupported() -> Error {
     Error::Platform("local sources need a WebKitGTK URI-scheme handler (phase 4)".into())
 }
 
+/// Iterations the periodic pump drains per call. GTK's main context keeps a
+/// source permanently ready in this environment (`main_iteration_do(false)`
+/// returns true forever), so an unbounded drain burns a core; the host's 4 ms
+/// cadence makes a small cap plenty.
+const PUMP_ITERATIONS: usize = 16;
+
+/// Iterations the one-shot pumps (`create`, `destroy`, `Drop`) drain: those
+/// calls must finish the map / close work before returning.
+const PUMP_DRAIN: usize = 1024;
+
 /// The one nested backend a process may own.
 static INSTANCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
@@ -152,12 +162,15 @@ impl NestedBackend {
     }
 
     /// Drains pending GTK work so WebKit's IPC keeps moving between frames.
-    fn pump_gtk(&mut self) {
+    /// `max_iterations` bounds the call: the periodic pump passes
+    /// [`PUMP_ITERATIONS`] (GTK has a permanently-ready source here, so an
+    /// unbounded drain burns a core), the one-shot create/teardown pumps pass
+    /// [`PUMP_DRAIN`].
+    fn pump_gtk(&mut self, max_iterations: usize) {
         if self.gtk_ready {
             // Drain, don't probe `events_pending`: the frame clock and WebKit's
-            // IPC run through idle/timeout sources, not GDK events. Bounded in
-            // case a source keeps re-arming itself.
-            for _ in 0..1024 {
+            // IPC run through idle/timeout sources, not GDK events.
+            for _ in 0..max_iterations {
                 if !gtk::main_iteration_do(false) {
                     break;
                 }
@@ -174,7 +187,7 @@ impl Drop for NestedBackend {
             surface.window.close();
             drop(surface.webview);
         }
-        self.pump_gtk();
+        self.pump_gtk(PUMP_DRAIN);
         let _ = self.commands.send(Command::Shutdown);
         if let Some(thread) = self.compositor.take() {
             let _ = thread.join();
@@ -306,7 +319,7 @@ impl WebViewBackend for NestedBackend {
             width: width as u32,
             height: height as u32,
         });
-        self.pump_gtk();
+        self.pump_gtk(PUMP_DRAIN);
         Ok(())
     }
 
@@ -405,22 +418,25 @@ impl WebViewBackend for NestedBackend {
             }
         }
         let _ = self.commands.send(Command::Destroy { id });
-        self.pump_gtk();
+        self.pump_gtk(PUMP_DRAIN);
     }
 
     fn frame_image(&mut self, id: SurfaceId) -> Option<SurfaceFrame> {
-        self.pump_gtk();
         lock(&self.shared.frames).get(&id).cloned()
     }
 
     fn popup_frames(&mut self, id: SurfaceId) -> Vec<crate::spec::PopupFrame> {
-        // GTK must keep running for the client to produce popups at all.
-        self.pump_gtk();
         lock(&self.shared.popups)
             .iter()
             .filter(|popup| popup.parent == id)
             .map(|popup| popup.frame.clone())
             .collect()
+    }
+
+    fn pump(&mut self) {
+        // GTK/WebKit only advance while their main context is iterated; the
+        // host drives this at a fixed cadence while a surface is live.
+        self.pump_gtk(PUMP_ITERATIONS);
     }
 
     fn input(&mut self, id: SurfaceId, event: WebInputEvent) {

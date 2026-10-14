@@ -50,9 +50,10 @@ mod linux {
     }
 
     impl Harness {
-        /// One paint pass plus the GTK/WebKit pump it drives.
+        /// One paint pass plus the main-context pump it drives.
         fn pump(&mut self) {
             self.webviews.frame(&self.live, self.viewport, &[]);
+            self.webviews.pump();
         }
         /// The current frame's pixels, through the frame's own transport.
         fn pixels(&mut self) -> Option<Vec<u8>> {
@@ -372,6 +373,7 @@ mod linux {
             let mut resized = false;
             while Instant::now() < until {
                 self.webviews.frame(&small_live, small_viewport, &[]);
+                self.webviews.pump();
                 if self
                     .webviews
                     .frame_image(0)
@@ -418,8 +420,6 @@ mod linux {
                 )
                 .unwrap_or_else(|error| fail(&format!("navigating to the URL failed: {error}")));
             let navigated = self.until(5, |h| {
-                // `frame_image` is what pumps GTK/WebKit on the main thread.
-                let _ = h.webviews.frame_image(0);
                 h.webviews.events().iter().any(|event| {
                     matches!(
                         event,
@@ -516,6 +516,7 @@ mod linux {
         let mut self_checked = false;
         while started.elapsed() < timeout {
             webviews.frame(live, viewport, &[]);
+            webviews.pump();
             if let Some(frame) = webviews.frame_image(0) {
                 if first_commit.is_none() {
                     first_commit = Some(started.elapsed());
@@ -972,6 +973,7 @@ mod linux {
         let mut seen = 0;
         loop {
             webviews.frame(live, viewport, &[]);
+            webviews.pump();
             if let Some(frame) = webviews.frame_image(0) {
                 let changed = last.as_ref().is_none_or(|last| !frame.same_as(last));
                 if changed {
@@ -1023,6 +1025,7 @@ mod linux {
         let until = Instant::now() + Duration::from_secs(10);
         loop {
             webviews.frame(live, viewport, &[]);
+            webviews.pump();
             let popups = webviews.popup_frames(0);
             if popups.is_empty() != want || Instant::now() >= until {
                 return popups;

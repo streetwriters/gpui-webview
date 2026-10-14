@@ -76,6 +76,11 @@ pub trait WebViewBackend: 'static {
         Vec::new()
     }
 
+    /// Advances the platform engine's main-context work (GTK/WebKit on Linux);
+    /// a backend whose engine owns its own loop leaves this a no-op. The host
+    /// calls it on the main thread at a fixed cadence while a surface is live.
+    fn pump(&mut self) {}
+
     /// Forwards one input event; only self-compositing backends consume it.
     fn input(&mut self, _id: SurfaceId, _event: crate::spec::WebInputEvent) {}
 

@@ -459,6 +459,14 @@ impl WebViews {
             .collect()
     }
 
+    /// Advances the backend's main-context work (the GTK/WebKit pump on Linux)
+    /// and reports whether any surface is still live, so the host's pump task
+    /// knows when to stop. `frame_image`/`popup_frames` are pure reads.
+    pub fn pump(&mut self) -> bool {
+        self.backend.pump();
+        !self.surfaces.is_empty()
+    }
+
     /// Forwards one input event to `key`'s surface. Keys need keyboard focus;
     /// motion, buttons, wheel and enter/leave route by position (T25).
     pub fn input(&mut self, key: u64, event: crate::spec::WebInputEvent) {
