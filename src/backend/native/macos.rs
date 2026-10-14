@@ -118,7 +118,8 @@ pub(super) fn create_surface(
     events: &Arc<Mutex<Vec<WebViewEvent>>>,
 ) -> Result<NativeSurface> {
     // The clip container.
-    let mtm = MainThreadMarker::new().ok_or_else(|| Error::Platform("not the main thread".into()))?;
+    let mtm =
+        MainThreadMarker::new().ok_or_else(|| Error::Platform("not the main thread".into()))?;
     let frame = NSRect::new(NSPoint::new(0., 0.), NSSize::new(1., 1.));
     let container = NSView::initWithFrame(NSView::alloc(mtm), frame);
     container.setWantsLayer(true);
@@ -150,11 +151,7 @@ pub(super) fn create_surface(
 /// The container is the visible clip and lives in the parent's coordinates;
 /// the webview keeps the block's full size and is offset inside the container,
 /// so the page never relayouts while scrolling.
-pub(super) fn place(
-    surface: &mut NativeSurface,
-    at: Placement,
-    parent: &ParentView,
-) {
+pub(super) fn place(surface: &mut NativeSurface, at: Placement, parent: &ParentView) {
     // A lowered surface needs the transparent hole; until that lands, hide it
     // so GPUI overlays are never occluded.
     let visible = at.visible && !at.overlay;
@@ -210,36 +207,16 @@ pub(super) fn apply_policy(webview: &wry::WebView, spec: &SurfaceSpec) {
     }
 }
 
-/// Builds the wry builder with every policy the macOS backend can enforce.
+/// Builds the wry builder for macOS: the shared pieces from
+/// [`super::base_builder`], the Darwin web-content terminate handler and the
+/// `WKWebViewConfiguration` script switch.
 fn build_builder(
     id: crate::SurfaceId,
     spec: &SurfaceSpec,
     events: &Arc<Mutex<Vec<WebViewEvent>>>,
 ) -> Result<wry::WebViewBuilder<'static>> {
-    let navigation_events = events.clone();
-    let policy = spec.policy.clone();
     use wry::{WebViewBuilderExtDarwin as _, WebViewBuilderExtMacos as _};
-    let mtm = MainThreadMarker::new();
-    let mut builder = wry::WebViewBuilder::new()
-        .with_bounds(wry::Rect {
-            position: wry::dpi::LogicalPosition::new(0, 0).into(),
-            size: wry::dpi::LogicalSize::new(1, 1).into(),
-        })
-        .with_visible(false)
-        .with_focused(false)
-        .with_devtools(spec.policy.engine.devtools)
-        .with_navigation_handler(move |url| match policy.navigation {
-            crate::spec::Navigation::Allow => true,
-            crate::spec::Navigation::OpenExternal => {
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    if let Ok(mut events) = navigation_events.lock() {
-                        events.push(WebViewEvent::OpenExternal { id, url });
-                    }
-                }
-                false
-            }
-            crate::spec::Navigation::Block => false,
-        })
+    let mut builder = super::base_builder(wry::WebViewBuilder::new(), id, spec, events, false)?
         .with_on_web_content_process_terminate_handler({
             let events = events.clone();
             move || {
@@ -248,13 +225,10 @@ fn build_builder(
                 }
             }
         });
-    if spec.policy.storage == crate::spec::Storage::Ephemeral {
-        builder = builder.with_incognito(true);
-    }
     // JavaScript off for clips: `WKWebpagePreferences` on a configuration we
     // hand to wry (it attaches its own handlers to it).
     if !spec.policy.scripts
-        && let Some(mtm) = mtm
+        && let Some(mtm) = MainThreadMarker::new()
     {
         let configuration = unsafe { WKWebViewConfiguration::new(mtm) };
         let preferences = unsafe { configuration.defaultWebpagePreferences() };
@@ -263,14 +237,5 @@ fn build_builder(
         }
         builder = builder.with_webview_configuration(configuration);
     }
-    builder = match &spec.source {
-        crate::spec::Source::Url(url) => builder.with_url(url.clone()),
-        crate::spec::Source::Html { html, .. } => builder.with_html(html.clone()),
-        crate::spec::Source::Local { .. } => {
-            return Err(Error::Platform(
-                "local sources need a WKURLSchemeHandler (phase 4)".into(),
-            ));
-        }
-    };
     Ok(builder)
 }

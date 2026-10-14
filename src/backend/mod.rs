@@ -7,9 +7,8 @@
 //! |-----------|---------------|--------------------------------------------|
 //! | `mock`    | any           | [`mock`](crate::mock): recording, no engine |
 //! | `web`     | wasm32        | [`web`]: a clip `<div>` + `<iframe>`        |
-//! | `wry`     | macOS/Windows | [`native`]: a wry child surface             |
-//! | `wry`     | Linux/X11     | [`native`] (Tier 1/2), `nested` compositor  |
-//! | `nested`  | Linux/Wayland | [`nested`]: smithay compositor (scaffold)   |
+//! | `wry`     | macOS/Windows | [`native`]: a wry child surface (WKWebView / WebView2) |
+//! | `nested`  | Linux         | [`nested`]: the smithay compositor is the Linux path |
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 pub mod web;

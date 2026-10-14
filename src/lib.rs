@@ -67,7 +67,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod backend;
-#[cfg(all(target_os = "linux", any(feature = "nested", dmabuf)))]
+/// The `GPUI_WEBVIEW_DEBUG` traces. Linux uses them in the nested compositor
+/// and the dma-buf paths; Windows traces the surface lifecycle
+/// (create/place/focus/destroy).
+#[cfg(any(
+    target_os = "windows",
+    all(target_os = "linux", any(feature = "nested", dmabuf))
+))]
 mod debug;
 pub mod host;
 pub mod keys;
@@ -91,6 +97,32 @@ pub use spec::{DmaBufFrame, DmaBufPlane};
 
 /// The crate's version, for host diagnostics.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Prepares the process for live native surfaces; call this as the first
+/// thing in `main`, before any other thread exists.
+///
+/// On Windows with the `wry` feature, GPUI must not present through
+/// DirectComposition: its target is created topmost, and a topmost DComp
+/// target draws above every child HWND, so a WebView2 surface would be
+/// created, receive input, and never become visible (T44). This sets
+/// `GPUI_DISABLE_DIRECT_COMPOSITION=1` when it is unset; GPUI then uses a
+/// flip-model swapchain and child HWNDs composite above it. GPUI reads the
+/// variable once, at platform init, so setting it later does nothing.
+///
+/// A no-op on every other target and without the feature.
+pub fn prepare_process() {
+    #[cfg(all(target_os = "windows", feature = "wry"))]
+    {
+        if std::env::var_os("GPUI_DISABLE_DIRECT_COMPOSITION").is_none() {
+            // SAFETY: this function is documented (and used) as the first
+            // call in `main`. GPUI still reads the variable on the main
+            // thread before any other thread can touch the environment.
+            unsafe {
+                std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

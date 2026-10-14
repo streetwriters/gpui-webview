@@ -56,12 +56,14 @@ impl SurfaceControl {
                 Navigation::Allow => true,
                 Navigation::Block => false,
                 Navigation::OpenExternal => {
-                    // `about:blank`, `data:` and `blob:` are loading geometry, not navigations.
+                    // `about:`, `data:` and `blob:` are loading geometry, not
+                    // navigations; any other non-http(s) scheme is refused so
+                    // it cannot reach the host's URL opener from a clip.
                     if url.starts_with("http://") || url.starts_with("https://") {
                         lock(&shared.events).push(WebViewEvent::OpenExternal { id, url });
                         false
                     } else {
-                        true
+                        crate::host::is_loading_geometry(&url)
                     }
                 }
             }

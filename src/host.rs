@@ -109,6 +109,16 @@ pub trait WebViewBackend: 'static {
         Vec::new()
     }
 
+    /// Test-support (`test-support` feature): a PNG snapshot of `id`'s current
+    /// page, rendered by the engine itself (WebView2's `CapturePreview`), so it
+    /// needs no desktop compositor. `None` when the platform cannot render one
+    /// or `id` is not live. The Windows E2E uses it to prove the page paints
+    /// even where the desktop readback is blind to GPU composition.
+    #[cfg(feature = "test-support")]
+    fn page_snapshot(&mut self, _id: SurfaceId) -> Option<Vec<u8>> {
+        None
+    }
+
     /// Whether the backend can serve `Source::Local` (a scheme handler or blob URL).
     fn supports_local(&self) -> bool {
         false
@@ -119,6 +129,14 @@ pub trait WebViewBackend: 'static {
 #[allow(dead_code)] // Used by the platform backends behind features.
 pub(crate) fn surface_rect(at: &Placement) -> gpui_kit::Bounds<gpui_kit::Pixels> {
     at.rect
+}
+
+/// Whether a URL is content being loaded (`about:`, `data:`, `blob:`) rather
+/// than a user navigation. Engine navigation handlers fire for both on some
+/// platforms — WebView2 fires for `about:blank` on `NavigateToString` — so the
+/// loading schemes must pass while other non-http(s) schemes stay refused.
+pub(crate) fn is_loading_geometry(url: &str) -> bool {
+    url.starts_with("about:") || url.starts_with("data:") || url.starts_with("blob:")
 }
 
 /// Zero bounds, used by backends that hide a surface by moving it out.

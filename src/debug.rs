@@ -12,7 +12,9 @@ pub(crate) fn debug_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("GPUI_WEBVIEW_DEBUG").is_some())
 }
 
-/// Whether the switch asks for per-event traces (`=2`).
+/// Whether the switch asks for per-event traces (`=2`). Linux-only: the
+/// nested compositor is the backend with per-event volume.
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn debug_verbose() -> bool {
     static VERBOSE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *VERBOSE.get_or_init(|| std::env::var("GPUI_WEBVIEW_DEBUG").is_ok_and(|value| value == "2"))
@@ -29,6 +31,7 @@ macro_rules! debug_log {
 pub(crate) use debug_log;
 
 /// Trace one per-event line when `GPUI_WEBVIEW_DEBUG=2` asks for them.
+#[cfg(not(target_os = "windows"))]
 macro_rules! debug_log2 {
     ($($arg:tt)*) => {
         if $crate::debug::debug_verbose() {
@@ -36,4 +39,5 @@ macro_rules! debug_log2 {
         }
     };
 }
+#[cfg(not(target_os = "windows"))]
 pub(crate) use debug_log2;

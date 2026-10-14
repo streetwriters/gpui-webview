@@ -27,6 +27,8 @@ wry = [
     "dep:objc2-app-kit",
     "dep:objc2-foundation",
     "dep:objc2-web-kit",
+    "dep:windows",
+    "dep:webview2-com",
 ]
 # Linux only: the in-process nested Wayland compositor (smithay). See
 # `backend/nested.rs` and EMBEDS.md §10.3.
@@ -40,6 +42,9 @@ dma-buf = []
 wayland-surface = []
 # "Open in window" / fullscreen presentations (a separate GPUI window).
 window = []
+# Test-support hooks (e.g. `page_snapshot`) the platform E2E drives; off for
+# every ordinary consumer so the public API stays clean.
+test-support = []
 
 [dependencies]
 anyhow = "1"
@@ -85,6 +90,24 @@ objc2-app-kit = { version = "0.3", optional = true, features = ["std", "NSView"]
 objc2-foundation = { version = "0.3", optional = true, features = ["std", "NSGeometry"] }
 objc2-web-kit = { version = "0.3", optional = true, features = ["std", "WKWebView", "WKWebViewConfiguration", "WKWebpagePreferences"] }
 
+# Windows native surface (EMBEDS.md §10.2): a WebView2 child HWND inside our
+# clip container. `windows` carries the Win32 message/geometry API and
+# `webview2-com` the policy handlers (context menu, process failure, new
+# windows, permissions). Both pin the versions wry 0.57 and gpui-pre-windows
+# use, so cargo unifies them.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+webview2-com = { version = "0.39", optional = true }
+
 # Linux native surface (EMBEDS.md §10.3): an in-process nested Wayland
 # compositor built on **smithay** (user decision, 2026-10-12). GTK/WebKitGTK
 # (through wry) connects to a private socket this process serves; the committed
@@ -114,6 +137,17 @@ path = "tests/nested_e2e.rs"
 harness = false
 required-features = ["nested"]
 
+# Windows end-to-end (`scripts/windows-run.sh`, WG2): a real GPUI window hosts
+# a live surface; the page is read back with WebView2's own snapshot and the
+# window with Windows.Graphics.Capture (falling back to GDI). `harness = false`
+# so it runs on the main thread (WebView2 requirement); needs an interactive
+# Windows session and the WebView2 Runtime.
+[[test]]
+name = "windows_e2e"
+path = "tests/windows_e2e.rs"
+harness = false
+required-features = ["wry", "test-support"]
+
 [dev-dependencies]
 gpui-kit = { version = "0.6.6", default-features = false, features = ["test-support"] }
 
@@ -122,3 +156,31 @@ gpui-kit = { version = "0.6.6", default-features = false, features = ["test-supp
 # capability query. Linux-only (the test is).
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gpui_wgpu = { package = "gpui-pre-wgpu", version = "0.3.6" }
+
+# The Windows E2E drives Win32 directly (GDI fallback readback, window and
+# process checks), Windows.Graphics.Capture (the composited-window proof),
+# maps GPUI's window raw handle and decodes WebView2's PNG page snapshot; an
+# integration test is its own crate, so it needs all of it.
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Devices_Display",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_Power",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+raw-window-handle = "0.6"
+image = { version = "0.25", default-features = false, features = ["png"] }

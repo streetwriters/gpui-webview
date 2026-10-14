@@ -392,6 +392,16 @@ impl WebViews {
         self.backend.frame_image(surface.id)
     }
 
+    /// Test-support (`test-support` feature): `key`'s page as PNG bytes,
+    /// rendered by the backend itself (WebView2 `CapturePreview`), so it needs
+    /// no desktop compositor. `None` when the backend cannot render one or
+    /// `key` is not live; the Windows E2E calls it.
+    #[cfg(feature = "test-support")]
+    pub fn page_snapshot(&mut self, key: u64) -> Option<Vec<u8>> {
+        let id = self.surfaces.iter().find(|surface| surface.key == key)?.id;
+        self.backend.page_snapshot(id)
+    }
+
     /// Native popups of `key`'s surface, bottom to top. Raw read: use
     /// [`Self::ready_popups`] to paint them.
     pub fn popup_frames(&mut self, key: u64) -> Vec<crate::spec::PopupFrame> {
