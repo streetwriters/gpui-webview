@@ -16,12 +16,14 @@ use crate::spec::SurfaceSpec;
 use crate::spec::WebInputEvent;
 use crate::spec::WebViewEvent;
 use gpui_kit::Window;
+use smithay::reexports::calloop::channel::Sender as CommandSender;
+use smithay::reexports::calloop::channel::channel;
 use smithay::reexports::wayland_server::ListeningSocket;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use super::compositor::compositor_main;
@@ -32,7 +34,7 @@ use crate::host::WebViewBackend;
 
 /// The backend. One per process; a second is refused (`Error::Platform`).
 pub struct NestedBackend {
-    commands: Sender<Command>,
+    commands: CommandSender<Command>,
     compositor: Option<std::thread::JoinHandle<()>>,
     shared: Arc<Shared>,
     /// The GTK window + webview per surface (main thread only).
@@ -108,7 +110,7 @@ impl NestedBackend {
             std::env::set_var("WAYLAND_DISPLAY", &socket_name);
         }
 
-        let (commands, receiver) = mpsc::channel();
+        let (commands, receiver) = channel();
         let (ready_tx, ready_rx) = mpsc::channel::<std::result::Result<(), String>>();
         let shared = Arc::new(Shared::default());
         let compositor = std::thread::Builder::new()

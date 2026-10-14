@@ -19,6 +19,13 @@ use smithay::output::Mode;
 use smithay::output::Output;
 use smithay::output::PhysicalProperties;
 use smithay::output::Scale;
+use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::calloop::Interest;
+use smithay::reexports::calloop::Mode as PollMode;
+use smithay::reexports::calloop::PostAction;
+use smithay::reexports::calloop::channel::Channel;
+use smithay::reexports::calloop::channel::Event as ChannelEvent;
+use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::wayland_server::Client;
 use smithay::reexports::wayland_server::Display;
 use smithay::reexports::wayland_server::ListeningSocket;
@@ -43,9 +50,9 @@ use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::ShmState;
 use std::collections::HashMap;
+use std::os::fd::AsFd;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
-use std::time::Duration;
+use std::sync::mpsc::Sender;
 
 use super::buffers::{CommittedBuffer, HeldBuffer, content_geometry};
 use super::input::apply_input;
@@ -258,14 +265,23 @@ impl WebClientData {
 
 impl smithay::reexports::wayland_server::backend::ClientData for WebClientData {}
 
+/// The loop's data: the display, the private socket and the compositor state.
+/// Both fds are registered as `Generic` sources; every callback reaches them
+/// through this struct.
+struct CalloopData {
+    state: NestedState,
+    display: Display<NestedState>,
+    socket: ListeningSocket,
+}
+
 /// The compositor thread: owns the `Display`, applies commands, publishes frames; never touches GTK.
 pub(super) fn compositor_main(
     socket: ListeningSocket,
-    commands: Receiver<Command>,
+    commands: Channel<Command>,
     shared: Arc<Shared>,
     ready: Sender<std::result::Result<(), String>>,
 ) {
-    let mut display = match Display::<NestedState>::new() {
+    let display = match Display::<NestedState>::new() {
         Ok(display) => display,
         Err(error) => {
             let _ = ready.send(Err(format!("wayland display: {error}")));
@@ -318,7 +334,7 @@ pub(super) fn compositor_main(
         }
     };
 
-    let mut state = NestedState {
+    let state = NestedState {
         compositor_state,
         shm_state,
         xdg_shell_state,
@@ -350,91 +366,159 @@ pub(super) fn compositor_main(
         shared,
         epoch: std::time::Instant::now(),
     };
+    // The loop blocks in `poll` while nothing happens, so an idle compositor
+    // costs no CPU (EMBEDS_REFACTOR.md §Phase 5); the M3 baseline was a 4 ms poll.
+    let mut event_loop: EventLoop<'static, CalloopData> = match EventLoop::try_new() {
+        Ok(event_loop) => event_loop,
+        Err(error) => {
+            let _ = ready.send(Err(format!("compositor event loop: {error}")));
+            return;
+        }
+    };
+    let mut data = CalloopData {
+        state,
+        display,
+        socket,
+    };
+
+    // Commands from the main thread (surface lifecycle and input); the channel's
+    // ping fd wakes the loop. `Shutdown` and the last sender dropping both stop it.
+    let signal = event_loop.get_signal();
+    event_loop
+        .handle()
+        .insert_source(
+            commands,
+            move |event, _, data: &mut CalloopData| match event {
+                ChannelEvent::Msg(Command::Shutdown) => signal.stop(),
+                ChannelEvent::Msg(command) => {
+                    apply_command(data, command);
+                    // The display fd wakes on *incoming* data only; anything just
+                    // queued for a client (input, configure, popup done) must be
+                    // written now, or it waits for the client's next message.
+                    let _ = data.display.flush_clients();
+                }
+                ChannelEvent::Closed => signal.stop(),
+            },
+        )
+        .expect("the command channel source is always insertable");
+
+    // The display fd: wayland client messages. Level-triggered, so the source
+    // stays armed; the dispatch drains the fd.
+    let display_fd = data
+        .display
+        .backend()
+        .poll_fd()
+        .try_clone_to_owned()
+        .expect("the display fd cannot be cloned");
+    event_loop
+        .handle()
+        .insert_source(
+            Generic::new(display_fd, Interest::READ, PollMode::Level),
+            |_, _, data: &mut CalloopData| {
+                if let Err(error) = data.display.dispatch_clients(&mut data.state) {
+                    eprintln!("gpui-webview: dispatch failed: {error}");
+                }
+                let _ = data.display.flush_clients();
+                // T11: a toplevel's title arrives in the same client batch.
+                data.state.accept_pending_toplevels();
+                Ok(PostAction::Continue)
+            },
+        )
+        .expect("the display source is always insertable");
+
+    // New client connections; the socket was bound before this thread started.
+    let socket_fd = data
+        .socket
+        .as_fd()
+        .try_clone_to_owned()
+        .expect("the socket fd cannot be cloned");
+    event_loop
+        .handle()
+        .insert_source(
+            Generic::new(socket_fd, Interest::READ, PollMode::Level),
+            |_, _, data: &mut CalloopData| {
+                while let Ok(Some(stream)) = data.socket.accept() {
+                    let _ = stream.set_nonblocking(true);
+                    let mut display_handle = data.display.handle();
+                    match display_handle.insert_client(stream, Arc::new(WebClientData::new())) {
+                        Ok(client) => debug_log!("client connected: {:?}", client.id()),
+                        Err(error) => eprintln!("gpui-webview: inserting client failed: {error}"),
+                    }
+                }
+                Ok(PostAction::Continue)
+            },
+        )
+        .expect("the socket source is always insertable");
+
+    // Globals exist before a client can connect (T1): `start` may return as
+    // soon as the loop is armed.
     let _ = ready.send(Ok(()));
+    if let Err(error) = event_loop.run(None, &mut data, |_| {}) {
+        eprintln!("gpui-webview: compositor loop stopped: {error}");
+    }
+}
 
-    loop {
-        // Commands from the main thread (surface lifecycle and input).
-        loop {
-            match commands.try_recv() {
-                Ok(Command::Configure { id, width, height }) => {
-                    // The toplevel is matched by its window title (`gpui-webview-{id}`),
-                    // not creation order; a mapped one re-layouts now, an unmapped one
-                    // picks the size up at configure.
-                    state.requested.insert(id, (width, height));
-                    if let Some(toplevel) = state.mapped.get(&id).cloned() {
-                        toplevel.with_pending_state(|pending| {
-                            pending.size = Some(Size::from((width as i32, height as i32)));
-                        });
-                        let _serial = toplevel.send_configure();
-                        debug_log!("configure: block {id} resized to {width}x{height}");
-                    }
-                }
-                Ok(Command::Destroy { id }) => {
-                    state.forget_toplevel(id);
-                }
-                Ok(Command::SetFocus { id, focused }) => {
-                    let serial = SERIAL_COUNTER.next_serial();
-                    let keyboard = state.keyboard.clone();
-                    if focused {
-                        if let Some(surface) = state
-                            .mapped
-                            .get(&id)
-                            .map(|surface| surface.wl_surface().clone())
-                        {
-                            keyboard.set_focus(&mut state, Some(surface), serial);
-                        }
-                    } else {
-                        // Check the protocol focus: the main thread already cleared the shared
-                        // flag optimistically, so it cannot say whether to send `wl_keyboard.leave`.
-                        let protocol_focus = state
-                            .mapped
-                            .get(&id)
-                            .map(|surface| surface.wl_surface().clone())
-                            .filter(|surface| {
-                                state.keyboard.current_focus().as_ref() == Some(surface)
-                            });
-                        if protocol_focus.is_some() {
-                            keyboard.set_focus(&mut state, None, serial);
-                            // Focus left the block: an open menu cannot outlive it.
-                            state.dismiss_popups(id);
-                        }
-                    }
-                    let mut target = lock(&state.shared.focus);
-                    if focused {
-                        *target = Some(id);
-                    } else if *target == Some(id) {
-                        *target = None;
-                    }
-                }
-                Ok(Command::Input { id, event }) => apply_input(&mut state, id, event),
-                #[cfg(dmabuf)]
-                Ok(Command::DmabufFeedback(capabilities)) => {
-                    let handle = display.handle();
-                    state.enable_dmabuf(&handle, capabilities);
-                }
-                Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => return,
-                Err(TryRecvError::Empty) => break,
+/// Applies one command from the main thread (compositor thread).
+fn apply_command(data: &mut CalloopData, command: Command) {
+    match command {
+        Command::Configure { id, width, height } => {
+            // The toplevel is matched by its window title (`gpui-webview-{id}`),
+            // not creation order; a mapped one re-layouts now, an unmapped one
+            // picks the size up at configure.
+            data.state.requested.insert(id, (width, height));
+            if let Some(toplevel) = data.state.mapped.get(&id).cloned() {
+                toplevel.with_pending_state(|pending| {
+                    pending.size = Some(Size::from((width as i32, height as i32)));
+                });
+                let _serial = toplevel.send_configure();
+                debug_log!("configure: block {id} resized to {width}x{height}");
             }
         }
-
-        // New client connections; the socket was bound before this thread started.
-        while let Ok(Some(stream)) = socket.accept() {
-            let _ = stream.set_nonblocking(true);
-            let mut display_handle = display.handle();
-            match display_handle.insert_client(stream, Arc::new(WebClientData::new())) {
-                Ok(client) => debug_log!("client connected: {:?}", client.id()),
-                Err(error) => eprintln!("gpui-webview: inserting client failed: {error}"),
+        Command::Destroy { id } => data.state.forget_toplevel(id),
+        Command::SetFocus { id, focused } => {
+            let serial = SERIAL_COUNTER.next_serial();
+            let keyboard = data.state.keyboard.clone();
+            if focused {
+                if let Some(surface) = data
+                    .state
+                    .mapped
+                    .get(&id)
+                    .map(|surface| surface.wl_surface().clone())
+                {
+                    keyboard.set_focus(&mut data.state, Some(surface), serial);
+                }
+            } else {
+                // Check the protocol focus: the main thread already cleared the shared
+                // flag optimistically, so it cannot say whether to send `wl_keyboard.leave`.
+                let protocol_focus = data
+                    .state
+                    .mapped
+                    .get(&id)
+                    .map(|surface| surface.wl_surface().clone())
+                    .filter(|surface| {
+                        data.state.keyboard.current_focus().as_ref() == Some(surface)
+                    });
+                if protocol_focus.is_some() {
+                    keyboard.set_focus(&mut data.state, None, serial);
+                    // Focus left the block: an open menu cannot outlive it.
+                    data.state.dismiss_popups(id);
+                }
+            }
+            let mut target = lock(&data.state.shared.focus);
+            if focused {
+                *target = Some(id);
+            } else if *target == Some(id) {
+                *target = None;
             }
         }
-
-        if let Err(error) = display.dispatch_clients(&mut state) {
-            eprintln!("gpui-webview: dispatch failed: {error}");
+        Command::Input { id, event } => apply_input(&mut data.state, id, event),
+        #[cfg(dmabuf)]
+        Command::DmabufFeedback(capabilities) => {
+            let handle = data.display.handle();
+            data.state.enable_dmabuf(&handle, capabilities);
         }
-        let _ = display.flush_clients();
-        state.accept_pending_toplevels();
-
-        // T21: polling until the Phase 5 calloop loop; a few syscalls per tick.
-        std::thread::sleep(Duration::from_millis(4));
+        // Handled by the channel callback, which stops the loop.
+        Command::Shutdown => {}
     }
 }
 
