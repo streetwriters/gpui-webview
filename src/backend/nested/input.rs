@@ -170,7 +170,7 @@ pub(super) fn apply_input(state: &mut NestedState, id: SurfaceId, event: WebInpu
             debug_log2!("input: axis ({lx:.0},{ly:.0}) dy={dy} dx={dx}");
         }
         WebInputEvent::Key { keystroke, pressed } => {
-            let Some(code) = crate::keys::physical_key(&keystroke) else {
+            let Some(code) = state.key_table.physical_key(&keystroke) else {
                 debug_log!(
                     "input: no keycode for {:?} (char {:?}); dropped",
                     keystroke.key,

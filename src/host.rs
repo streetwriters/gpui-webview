@@ -101,6 +101,12 @@ pub trait WebViewBackend: 'static {
     /// app that never reports leaves the client waiting, which is the point.
     fn surface_presented(&mut self, _id: SurfaceId) {}
 
+    /// The host's active keyboard layout, by the name the platform reports
+    /// (GPUI's `keyboard_layout().name()`, e.g. `French`). A backend that hands
+    /// its client a keymap matches it to this layout so keys type what the
+    /// user's keyboard shows. Default: no-op.
+    fn set_keyboard_layout(&mut self, _name: &str) {}
+
     /// Sets the streaming source for `Source::Local` (once, before any `create`).
     fn set_scheme_loader(&mut self, _loader: std::sync::Arc<dyn SchemeLoader>) {}
 

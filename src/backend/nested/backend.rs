@@ -451,6 +451,10 @@ impl WebViewBackend for NestedBackend {
         *lock(&self.shared.waker) = Some(waker);
     }
 
+    fn set_keyboard_layout(&mut self, name: &str) {
+        let _ = self.commands.send(Command::KeyboardLayout(name.to_owned()));
+    }
+
     fn surface_presented(&mut self, id: SurfaceId) {
         // Best-effort: the compositor may already be gone.
         let _ = self.commands.send(Command::Presented { id });

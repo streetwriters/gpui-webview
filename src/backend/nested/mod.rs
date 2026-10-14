@@ -23,6 +23,7 @@ mod backend;
 mod buffers;
 mod compositor;
 mod input;
+mod keymap;
 mod policy;
 mod popups;
 
@@ -73,6 +74,8 @@ pub(super) enum Command {
     /// The renderer's importable formats, advertised as `linux-dmabuf` feedback.
     #[cfg(dmabuf)]
     DmabufFeedback(gpui_kit::DmaBufCapabilities),
+    /// The host's active keyboard layout name; the client keymap follows it.
+    KeyboardLayout(String),
     Shutdown,
 }
 

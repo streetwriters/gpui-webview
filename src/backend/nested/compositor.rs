@@ -124,6 +124,8 @@ pub struct NestedState {
     pub(super) seat_state: SeatState<Self>,
     pub(super) pointer: PointerHandle<Self>,
     pub(super) keyboard: KeyboardHandle<Self>,
+    /// Key names to evdev codes, read from `keyboard`'s compiled keymap.
+    pub(super) key_table: super::keymap::KeyTable,
     /// Kept alive so the `wl_output` global stays advertised.
     #[allow(dead_code)]
     pub(super) output: Output,
@@ -348,7 +350,7 @@ pub(super) fn compositor_main(
         }
     };
 
-    let state = NestedState {
+    let mut state = NestedState {
         compositor_state,
         shm_state,
         xdg_shell_state,
@@ -356,6 +358,7 @@ pub(super) fn compositor_main(
         seat_state,
         pointer,
         keyboard,
+        key_table: Default::default(),
         output,
         requested: HashMap::new(),
         pending_toplevels: Vec::new(),
@@ -381,6 +384,7 @@ pub(super) fn compositor_main(
         shared,
         epoch: std::time::Instant::now(),
     };
+    state.rebuild_key_table();
     // The loop blocks in `poll` while nothing happens, so an idle compositor
     // costs no CPU (EMBEDS_REFACTOR.md §Phase 5); the M3 baseline was a 4 ms poll.
     let mut event_loop: EventLoop<'static, CalloopData> = match EventLoop::try_new() {
@@ -535,6 +539,7 @@ fn apply_command(data: &mut CalloopData, command: Command) {
             data.state.enable_dmabuf(&handle, capabilities);
         }
         // Handled by the channel callback, which stops the loop.
+        Command::KeyboardLayout(name) => data.state.set_host_layout(&name),
         Command::Shutdown => {}
     }
 }

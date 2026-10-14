@@ -502,6 +502,12 @@ impl WebViews {
         self.backend.set_waker(waker);
     }
 
+    /// Forwards the host's active keyboard layout (see
+    /// [`WebViewBackend::set_keyboard_layout`]).
+    pub fn set_keyboard_layout(&mut self, name: &str) {
+        self.backend.set_keyboard_layout(name);
+    }
+
     /// Reports that `key`'s latest frame was painted (see
     /// [`WebViewBackend::surface_presented`]); a no-op when the key is gone.
     pub fn presented(&mut self, key: u64) {

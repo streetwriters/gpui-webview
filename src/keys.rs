@@ -25,7 +25,7 @@ pub fn physical_key(keystroke: &Keystroke) -> Option<u32> {
 
 /// A US-layout table for the keys a page needs. `Fn` is absent: it is a
 /// hardware modifier and a code for it would type nothing.
-fn code_for_name(key: &str) -> Option<u32> {
+pub(crate) fn code_for_name(key: &str) -> Option<u32> {
     Some(match key {
         "a" => 30,
         "b" => 48,

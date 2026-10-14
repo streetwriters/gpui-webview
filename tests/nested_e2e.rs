@@ -196,6 +196,19 @@ mod linux {
             self.mods(Default::default());
         }
 
+        fn step_layout(&mut self) {
+            self.focus();
+            // The client keymap follows the host layout: `é` has no US key (the
+            // hand table drops it) but is the unshifted `2` key in French.
+            self.webviews.set_keyboard_layout("French");
+            self.key("\u{e9}", true);
+            self.expect("layout", "layout", 5, |bytes| {
+                count_rgb(bytes, colour("layout"))
+            });
+            self.key("\u{e9}", false);
+            self.webviews.set_keyboard_layout("English (US)");
+        }
+
         fn step_pointer_leave(&mut self) {
             // A leave releases the protocol pointer focus (see `GPUI_WEBVIEW_DEBUG=1`).
             self.motion(120.0, 80.0);
@@ -702,6 +715,7 @@ mod linux {
                     document.addEventListener('keydown', function(e){\
                     keyCount++;\
                     if (e.key === '@') { pageBody.style.background = '#7fc81e'; return; }\
+                    if (e.key === '\\u00e9') { pageBody.style.background = '#c8c87f'; return; }\
                     pageBody.style.background = keyCount === 1 ? '#c81ec8' : '#7f1e1e';});\
                     document.addEventListener('keyup', function(e){\
                     if (e.key === 'a') pageBody.style.background='#c87f1e';});\
@@ -856,11 +870,12 @@ mod linux {
             height,
             html,
         };
-        let steps: [(&str, fn(&mut Harness)); 11] = [
+        let steps: [(&str, fn(&mut Harness)); 12] = [
             ("script", Harness::step_script),
             ("click", Harness::step_click),
             ("key", Harness::step_key),
             ("shifted-at", Harness::step_shifted_at),
+            ("layout", Harness::step_layout),
             ("pointer-leave", Harness::step_pointer_leave),
             ("popups", Harness::step_popups),
             ("menu", Harness::step_menu),
@@ -923,6 +938,7 @@ mod linux {
         ("marker", 0x1e7fc8),
         ("keyup", 0xc87f1e),
         ("at", 0x7fc81e),
+        ("layout", 0xc8c87f),
         ("storm", 0x7f1e1e),
         ("changed", 0xc81e7f),
     ];
