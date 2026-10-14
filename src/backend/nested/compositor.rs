@@ -51,7 +51,7 @@ use super::buffers::{CommittedBuffer, HeldBuffer, content_geometry};
 use super::input::apply_input;
 use super::lock;
 use super::popups::{Popup, popup_geometry, popup_parent};
-use crate::debug::debug_log;
+use crate::debug::{debug_log, debug_log2};
 use smithay::input::SeatHandler;
 use smithay::wayland::compositor::CompositorHandler;
 use smithay::wayland::output::OutputHandler;
@@ -507,6 +507,7 @@ impl CompositorHandler for NestedState {
                         size.1
                     );
                 }
+                debug_log2!("commit: block {id} {}x{} over {transport}", size.0, size.1);
                 if let Some(buffer) = hold {
                     // T14: hold the buffer one commit, or WebKit rewrites pixels the app may still import.
                     self.held_buffers.entry(id).or_default().hold(buffer);

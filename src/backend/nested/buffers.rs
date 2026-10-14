@@ -34,6 +34,7 @@ use smithay::wayland::shm::{self, ShmHandler, ShmState};
 use std::sync::Arc;
 
 use super::compositor::NestedState;
+use crate::debug::debug_log2;
 #[cfg(dmabuf)]
 use crate::debug::debug_log;
 #[cfg(dmabuf)]
@@ -196,6 +197,9 @@ impl NestedState {
                     .collect()
             });
         let time = self.now_ms();
+        if !callbacks.is_empty() {
+            debug_log2!("commit: fired {} frame callback(s)", callbacks.len());
+        }
         for callback in callbacks {
             callback.done(time);
         }

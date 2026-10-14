@@ -82,3 +82,6 @@ Initial incubation in the Notesnook GPUI spike (EMBEDS.md §7–§15).
   - One `#[cfg(dmabuf)]` alias (via a build script) replaces the three-part
     `target_os + feature` condition, and the nested backend shares one state
     struct instead of four `Arc<Mutex<…>>` maps.
+  - `GPUI_WEBVIEW_DEBUG=2` restores the per-event and per-commit traces
+    (`=1` stays the milestone log), so commit rates and input routing can be
+    measured without extra builds.

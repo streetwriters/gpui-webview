@@ -13,7 +13,7 @@ use smithay::utils::Point as SPoint;
 use smithay::utils::SERIAL_COUNTER;
 
 use super::compositor::{NestedState, SurfaceRole, surface_role};
-use crate::debug::debug_log;
+use crate::debug::{debug_log, debug_log2};
 
 impl NestedState {
     /// Re-enters the surface under the pointer on the next event. T8: a popup the
@@ -94,6 +94,7 @@ pub(super) fn apply_input(state: &mut NestedState, id: SurfaceId, event: WebInpu
             );
             // T7: clients dispatch a group only when the frame arrives.
             pointer.frame(state);
+            debug_log2!("input: motion ({lx:.0},{ly:.0})");
         }
         WebInputEvent::PointerLeave => {
             // The pointer left the block: `wl_pointer.leave` stops stuck hover/cursor state.
@@ -108,6 +109,7 @@ pub(super) fn apply_input(state: &mut NestedState, id: SurfaceId, event: WebInpu
                     });
             if belongs {
                 state.release_pointer_focus();
+                debug_log2!("input: pointer left block {id}");
             }
         }
         WebInputEvent::PointerButton {
@@ -137,6 +139,7 @@ pub(super) fn apply_input(state: &mut NestedState, id: SurfaceId, event: WebInpu
                 },
             );
             pointer.frame(state);
+            debug_log2!("input: button {button:#x} pressed={pressed}");
         }
         WebInputEvent::PointerAxis { dx, dy, .. } => {
             // T12: negate (GPUI's down is negative, GDK's positive) and scale by
@@ -164,6 +167,7 @@ pub(super) fn apply_input(state: &mut NestedState, id: SurfaceId, event: WebInpu
             }
             pointer.axis(state, frame);
             pointer.frame(state);
+            debug_log2!("input: axis ({lx:.0},{ly:.0}) dy={dy} dx={dx}");
         }
         WebInputEvent::Key { keystroke, pressed } => {
             let Some(code) = crate::keys::physical_key(&keystroke) else {
@@ -180,6 +184,7 @@ pub(super) fn apply_input(state: &mut NestedState, id: SurfaceId, event: WebInpu
             if !is_modifier_key_name(&keystroke.key) {
                 press_missing_modifiers(state, keystroke.modifiers);
             }
+            debug_log2!("input: key {:?} code {code} pressed={pressed}", keystroke.key);
             send_key(
                 state,
                 code,
@@ -190,7 +195,10 @@ pub(super) fn apply_input(state: &mut NestedState, id: SurfaceId, event: WebInpu
                 },
             );
         }
-        WebInputEvent::Modifiers { modifiers } => set_protocol_modifiers(state, modifiers),
+        WebInputEvent::Modifiers { modifiers } => {
+            debug_log2!("input: modifiers {modifiers:?}");
+            set_protocol_modifiers(state, modifiers);
+        }
     }
 }
 
