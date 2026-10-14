@@ -185,9 +185,8 @@ impl NestedState {
         }
     }
 
-    /// Takes the frame callbacks a commit brought and answers them now
-    /// (commit-time pacing: popups and the `GPUI_WEBVIEW_COMMIT_CALLBACKS`
-    /// switch; the toplevel path parks them via [`Self::queue_frame_callbacks`]).
+    /// Answers the frame callbacks a commit brought, now (popups; the toplevel
+    /// path parks them via [`Self::queue_frame_callbacks`] until present).
     pub(super) fn fire_frame_callbacks(&mut self, surface: &WlSurface) {
         let callbacks = self.take_frame_callbacks(surface);
         self.finish_frame_callbacks(callbacks);

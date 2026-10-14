@@ -66,7 +66,7 @@ pub(super) enum Command {
         event: WebInputEvent,
     },
     /// The app painted the surface: release its parked frame callbacks
-    /// (present pacing; see `GPUI_WEBVIEW_COMMIT_CALLBACKS`).
+    /// (present pacing).
     Presented {
         id: SurfaceId,
     },

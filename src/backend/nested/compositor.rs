@@ -151,9 +151,6 @@ pub struct NestedState {
     pub(super) dmabuf_formats: Vec<(u32, u64)>,
     /// A per-commit sequence for frames (repaint detection).
     pub(super) commit_sequence: u64,
-    /// Whether frame callbacks are released on present (`Command::Presented`)
-    /// instead of on commit (`GPUI_WEBVIEW_COMMIT_CALLBACKS=1` opts out).
-    pub(super) present_paced: bool,
     /// Toplevel frame callbacks parked until the app reports the surface
     /// painted (present pacing).
     pub(super) pending_frame_callbacks: HashMap<SurfaceId, Vec<WlCallback>>,
@@ -298,10 +295,6 @@ pub(super) fn compositor_main(
     shared: Arc<Shared>,
     ready: Sender<std::result::Result<(), String>>,
 ) {
-    // Phase 5 step 4: frame callbacks are released when the app reports the
-    // frame painted (present pacing). `GPUI_WEBVIEW_COMMIT_CALLBACKS=1`
-    // restores the old commit-time release, for A/B comparison.
-    let commit_paced = std::env::var_os("GPUI_WEBVIEW_COMMIT_CALLBACKS").is_some();
     let display = match Display::<NestedState>::new() {
         Ok(display) => display,
         Err(error) => {
@@ -378,7 +371,6 @@ pub(super) fn compositor_main(
         #[cfg(dmabuf)]
         dmabuf_formats: Vec::new(),
         commit_sequence: 0,
-        present_paced: !commit_paced,
         pending_frame_callbacks: HashMap::new(),
         held_buffers: HashMap::new(),
         #[cfg(dmabuf)]
@@ -631,13 +623,9 @@ impl CompositorHandler for NestedState {
             CommittedBuffer::Unchanged | CommittedBuffer::Rejected => {}
         }
 
-        if self.present_paced {
-            // Present pacing: the callbacks this commit brought wait until the
-            // app reports the surface painted.
-            self.queue_frame_callbacks(id, surface);
-        } else {
-            self.fire_frame_callbacks(surface);
-        }
+        // Present pacing: the callbacks this commit brought wait until the app
+        // reports the surface painted (an off-screen page stops rendering).
+        self.queue_frame_callbacks(id, surface);
     }
 
     fn destroyed(&mut self, surface: &WlSurface) {
