@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use gpui_kit::{Bounds, Pixels, Window};
 
-use crate::host::{SchemeLoader, WebViewBackend, spec_supported};
+use crate::host::{WebViewBackend, spec_supported};
 pub use crate::spec::WebViewEvent as Event;
 use crate::spec::{
     Config, Error, OverlayBehavior, Placement, Presentation, Result, SurfaceId, SurfaceSpec,
@@ -161,7 +161,6 @@ pub struct WebViews {
     frame_serial: u64,
     surfaces: Vec<Surface>,
     events: Vec<WebViewEvent>,
-    loader: Option<Arc<dyn SchemeLoader>>,
     dmabuf: DmaBufCache,
     /// The last scale factor forwarded to the backend.
     scale_factor: Option<f32>,
@@ -238,16 +237,9 @@ impl WebViews {
             frame_serial: 0,
             surfaces: Vec::new(),
             events: Vec::new(),
-            loader: None,
             dmabuf: DmaBufCache::default(),
             scale_factor: None,
         }
-    }
-
-    /// Installs the streaming source for `Source::Local`, before any local `activate`.
-    pub fn set_scheme_loader(&mut self, loader: Arc<dyn SchemeLoader>) {
-        self.loader = Some(loader.clone());
-        self.backend.set_scheme_loader(loader);
     }
 
     /// Binds the backend to the window (idempotent; call from the first paint).
@@ -299,7 +291,7 @@ impl WebViews {
     /// Makes `key` live. Re-activation refreshes the spec (navigating only on a
     /// real change); over capacity the least recently placed engine is reused.
     pub fn activate(&mut self, key: u64, spec: SurfaceSpec) -> Result<SurfaceId> {
-        if !spec_supported(self.backend.as_ref(), &spec) {
+        if !spec_supported(&spec) {
             return Err(Error::Unsupported);
         }
         if let Some(index) = self.surfaces.iter().position(|surface| surface.key == key) {
@@ -850,15 +842,6 @@ mod tests {
         );
         assert_eq!(webviews.activate(1, bad), Err(Error::Unsupported));
         assert!(recorder.created().is_empty());
-        let local = SurfaceSpec::new(
-            Source::Local {
-                scheme: "nn-clip",
-                path: "hash".into(),
-            },
-            Policy::strict(),
-            "clip",
-        );
-        assert_eq!(webviews.activate(2, local), Err(Error::Unsupported));
     }
 
     #[test]

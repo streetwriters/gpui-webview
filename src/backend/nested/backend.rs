@@ -57,12 +57,6 @@ pub(super) struct NestedSurface {
     size: (u32, u32),
 }
 
-/// `Source::Local` needs a WebKitGTK URI-scheme handler; create and navigate
-/// share the refusal.
-fn local_sources_unsupported() -> Error {
-    Error::Platform("local sources need a WebKitGTK URI-scheme handler (phase 4)".into())
-}
-
 /// Iterations the periodic pump drains per call. GTK's main context keeps a
 /// source permanently ready in this environment (`main_iteration_do(false)`
 /// returns true forever), so an unbounded drain burns a core; the host's 4 ms
@@ -276,7 +270,6 @@ impl WebViewBackend for NestedBackend {
         let builder = match &spec.source {
             Source::Url(url) => builder.with_url(url.clone()),
             Source::Html { html, .. } => builder.with_html(html.clone()),
-            Source::Local { .. } => return Err(local_sources_unsupported()),
         };
         let webview = builder
             .build_gtk(&fixed)
@@ -355,7 +348,6 @@ impl WebViewBackend for NestedBackend {
                 .webview
                 .load_html(html)
                 .map_err(|error| Error::Load(error.to_string())),
-            Source::Local { .. } => Err(local_sources_unsupported()),
         }
     }
 
@@ -473,9 +465,5 @@ impl WebViewBackend for NestedBackend {
     fn surface_presented(&mut self, id: SurfaceId) {
         // Best-effort: the compositor may already be gone.
         let _ = self.commands.send(Command::Presented { id });
-    }
-
-    fn supports_local(&self) -> bool {
-        false
     }
 }

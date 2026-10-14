@@ -14,17 +14,6 @@ pub enum Source {
     Url(String),
     /// Inline HTML: the small-clip fallback. `base` is the `<base href>`.
     Html { html: String, base: Option<String> },
-    /// Host-provided local content streamed through a [`SchemeLoader`].
-    ///
-    /// [`SchemeLoader`]: crate::SchemeLoader
-    Local { scheme: &'static str, path: String },
-}
-
-impl Source {
-    /// Whether the source needs a [`SchemeLoader`](crate::SchemeLoader).
-    pub fn is_local(&self) -> bool {
-        matches!(self, Self::Local { .. })
-    }
 }
 
 /// How the engine's storage is scoped.

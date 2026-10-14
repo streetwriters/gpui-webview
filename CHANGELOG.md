@@ -7,8 +7,9 @@ Initial incubation in the Notesnook GPUI spike (EMBEDS.md §7–§15).
 - `WebViews` manager: capacity, reuse by navigation, scroll-out teardown,
   overlay Lower/Freeze, skip-unchanged `frame`, focus hand-off, event drain.
 - `WebViewBackend` contract with `attach`/`create`/`navigate`/`place`/
-  `set_focus`/`present`/`destroy` and a `SchemeLoader` for local streaming
-  sources.
+  `set_focus`/`present`/`destroy`. Sources are a URL or inline HTML (the
+  `Source::Local`/`SchemeLoader` streaming path was dropped: a host hands over
+  already-decrypted bytes as HTML).
 - `MockBackend` recording backend (default feature) so the whole contract is
   testable with no engine on every target.
 - `web` backend (wasm): clip `<div>` + `<iframe>`, never reparented, blob URLs

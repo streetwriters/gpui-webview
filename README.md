@@ -4,7 +4,7 @@ Pooled, clipped **live web surfaces** for GPUI applications: WKWebView on
 macOS, WebView2 (planned) on Windows, WebKitGTK + a nested Wayland compositor
 (planned) on Linux, and a DOM `<iframe>` overlay on wasm/web. It knows nothing
 about any application's documents — surfaces are keyed by opaque `u64`s and
-content is a URL, HTML bytes, or a host-provided local source.
+content is a URL or HTML bytes.
 
 This crate is the platform layer behind the Notesnook spike's embed implementation
 (`apps/desktop-gpui-spike/EMBEDS.md`, §7–§15). It lives inside that workspace

@@ -8,30 +8,6 @@ use crate::spec::{
     Error, OverlayBehavior, Placement, Presentation, Result, Source, SurfaceId, SurfaceSpec,
 };
 
-/// A seekable byte stream for `Source::Local` content; produced by a [`SchemeLoader`].
-pub trait ReadSeek: std::io::Read + std::io::Seek + Send {}
-impl<T: std::io::Read + std::io::Seek + Send> ReadSeek for T {}
-
-/// Streams `Source::Local` content to the surface; the app implements it over
-/// its attachment store (EMBEDS.md §5). A backend registers the scheme with the
-/// platform engine and pulls ranges through these methods.
-pub trait SchemeLoader: Send + Sync + 'static {
-    /// Opens `scheme://path`. Called once per navigation/range at most.
-    fn open(&self, scheme: &str, path: &str) -> Result<Box<dyn ReadSeek>>;
-
-    /// The total length when known without opening; `None` lets a backend buffer.
-    fn len(&self, scheme: &str, path: &str) -> Option<u64> {
-        let _ = (scheme, path);
-        None
-    }
-
-    /// The MIME type to serve the content as.
-    fn mime(&self, scheme: &str, path: &str) -> Option<String> {
-        let _ = (scheme, path);
-        None
-    }
-}
-
 /// The backend contract. Implementations are `'static`; only the platform-refusable methods fail.
 pub trait WebViewBackend: 'static {
     /// The backend's name for diagnostics ("mock", "web", "macos", …).
@@ -128,9 +104,6 @@ pub trait WebViewBackend: 'static {
     /// [`bridges_selection`](Self::bridges_selection). Default: no-op.
     fn set_host_selection(&mut self, _selection: crate::spec::Selection, _text: Option<String>) {}
 
-    /// Sets the streaming source for `Source::Local` (once, before any `create`).
-    fn set_scheme_loader(&mut self, _loader: std::sync::Arc<dyn SchemeLoader>) {}
-
     /// Backend-originated events since the last drain.
     fn events(&mut self) -> Vec<crate::spec::WebViewEvent> {
         Vec::new()
@@ -144,11 +117,6 @@ pub trait WebViewBackend: 'static {
     #[cfg(feature = "test-support")]
     fn page_snapshot(&mut self, _id: SurfaceId) -> Option<Vec<u8>> {
         None
-    }
-
-    /// Whether the backend can serve `Source::Local` (a scheme handler or blob URL).
-    fn supports_local(&self) -> bool {
-        false
     }
 }
 
@@ -173,10 +141,9 @@ pub(crate) fn empty_bounds() -> gpui_kit::Bounds<gpui_kit::Pixels> {
     Bounds::new(point(px(0.), px(0.)), size(px(0.), px(0.)))
 }
 
-/// Whether `backend` can serve a spec (otherwise: poster + `openUrl` fallback).
-pub fn spec_supported(backend: &dyn WebViewBackend, spec: &SurfaceSpec) -> bool {
+/// Whether a spec can be served at all (otherwise: poster + `openUrl` fallback).
+pub fn spec_supported(spec: &SurfaceSpec) -> bool {
     match &spec.source {
-        Source::Local { .. } => backend.supports_local(),
         Source::Url(url) => {
             let url = url.trim().to_ascii_lowercase();
             url.starts_with("http://") || url.starts_with("https://")
@@ -219,9 +186,7 @@ mod tests {
 
     #[test]
     fn only_http_sources_are_remote_surface_material() {
-        let backend = UnsupportedBackend("test");
-        let supported =
-            |source| spec_supported(&backend, &SurfaceSpec::new(source, Policy::strict(), "x"));
+        let supported = |source| spec_supported(&SurfaceSpec::new(source, Policy::strict(), "x"));
         assert!(supported(Source::Url("https://example.com".into())));
         assert!(supported(Source::Url("http://localhost:8080".into())));
         assert!(!supported(Source::Url("javascript:alert(1)".into())));
@@ -230,11 +195,6 @@ mod tests {
         assert!(supported(Source::Html {
             html: "<p>x</p>".into(),
             base: None
-        }));
-        // The unsupported backend cannot serve local content.
-        assert!(!supported(Source::Local {
-            scheme: "nn-clip",
-            path: "hash".into()
         }));
     }
 }

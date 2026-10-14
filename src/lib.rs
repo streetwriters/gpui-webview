@@ -83,7 +83,7 @@ pub mod mock;
 mod paint;
 pub mod spec;
 
-pub use host::{ReadSeek, SchemeLoader, UnsupportedBackend, WebViewBackend};
+pub use host::{UnsupportedBackend, WebViewBackend};
 pub use keys::physical_key;
 pub use manager::WebViews;
 pub use paint::{ReadyFrame, ReadyPopup, paint_frame};

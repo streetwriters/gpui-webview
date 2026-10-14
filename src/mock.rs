@@ -29,7 +29,6 @@ struct MockState {
     events: Vec<WebViewEvent>,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
     presented_surfaces: Vec<SurfaceId>,
-    supports_local: bool,
     bridges_selection: bool,
     host_selections: Vec<(crate::spec::Selection, Option<String>)>,
     fail_attach: bool,
@@ -46,11 +45,6 @@ pub struct MockBackend {
 impl MockBackend {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// A mock that can serve `Source::Local` (for the clip path's tests).
-    pub fn supporting_local(self) -> Self {
-        self.with(|state| state.supports_local = true)
     }
 
     /// A mock that bridges the selection, like the nested Linux compositor.
@@ -239,10 +233,6 @@ impl WebViewBackend for MockBackend {
         if let Ok(mut state) = self.state.lock() {
             state.destroyed.push(id);
         }
-    }
-
-    fn supports_local(&self) -> bool {
-        self.read(|state| state.supports_local)
     }
 
     fn bridges_selection(&self) -> bool {

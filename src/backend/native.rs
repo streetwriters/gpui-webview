@@ -74,7 +74,6 @@ pub struct NativeBackend {
     #[cfg(target_os = "windows")]
     context: wry::WebContext,
     surfaces: HashMap<SurfaceId, NativeSurface>,
-    loader: Option<Arc<dyn crate::host::SchemeLoader>>,
     /// Events raised by the platform handlers (navigation, loads), drained by
     /// the manager.
     events: Arc<Mutex<Vec<WebViewEvent>>>,
@@ -130,7 +129,6 @@ impl NativeBackend {
             #[cfg(target_os = "windows")]
             context: wry::WebContext::new(data_directory()),
             surfaces: HashMap::new(),
-            loader: None,
             events: Arc::new(Mutex::new(Vec::new())),
             attached: false,
         }
@@ -230,11 +228,6 @@ impl WebViewBackend for NativeBackend {
                 .webview
                 .load_html(html)
                 .map_err(|error| Error::Load(error.to_string()))?,
-            crate::spec::Source::Local { .. } => {
-                return Err(Error::Platform(
-                    "local sources need the platform scheme handler".into(),
-                ));
-            }
         }
         surface.lowered = false;
         Ok(())
@@ -340,16 +333,6 @@ impl WebViewBackend for NativeBackend {
         }
     }
 
-    fn set_scheme_loader(&mut self, loader: Arc<dyn crate::host::SchemeLoader>) {
-        self.loader = Some(loader);
-    }
-
-    fn supports_local(&self) -> bool {
-        // Requires a registered URL scheme; implemented with `webclip` in
-        // phase 4 (§5). Until then clips fall back to their poster.
-        false
-    }
-
     fn events(&mut self) -> Vec<WebViewEvent> {
         self.events
             .lock()
@@ -453,11 +436,6 @@ pub(super) fn base_builder<'a>(
     builder = match &spec.source {
         crate::spec::Source::Url(url) => builder.with_url(url.clone()),
         crate::spec::Source::Html { html, .. } => builder.with_html(html.clone()),
-        crate::spec::Source::Local { .. } => {
-            return Err(Error::Platform(
-                "local sources need the platform scheme handler".into(),
-            ));
-        }
     };
     Ok(builder)
 }

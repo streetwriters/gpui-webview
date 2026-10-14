@@ -39,7 +39,6 @@ struct WebSurface {
 /// The wasm backend. One per window.
 pub struct WebBackend {
     surfaces: HashMap<SurfaceId, WebSurface>,
-    loader: Option<std::sync::Arc<dyn crate::host::SchemeLoader>>,
     events: Vec<WebViewEvent>,
     /// The z-index the canvas is assumed to have; surfaces above it are
     /// interactive, lowered ones go below. The app must give its canvas this
@@ -58,7 +57,6 @@ impl WebBackend {
     pub fn new() -> Self {
         Self {
             surfaces: HashMap::new(),
-            loader: None,
             events: Vec::new(),
             canvas_z: 0,
         }
@@ -106,28 +104,13 @@ impl WebBackend {
         let _ = frame.set_attribute("loading", "eager");
     }
 
-    /// Builds the source URL for a surface, materialising `Source::Local`
-    /// through the scheme loader into a blob URL (revoked on teardown).
-    /// Builds the source URL for a surface. `Source::Html` and
-    /// `Source::Local` are materialised into blob URLs, which the caller must
-    /// revoke on navigate/teardown.
+    /// Builds the source URL for a surface. `Source::Html` is materialised
+    /// into a blob URL, which the caller must revoke on navigate/teardown.
     fn source_url(&mut self, source: &Source) -> Result<(String, Option<String>)> {
         match source {
             Source::Url(url) => Ok((url.clone(), None)),
             Source::Html { html, .. } => {
                 let (url, blob) = self.blob_url(html.as_bytes(), "text/html")?;
-                Ok((url, Some(blob)))
-            }
-            Source::Local { scheme, path } => {
-                let loader = self.loader.as_ref().ok_or(Error::Unsupported)?;
-                let mut bytes = Vec::new();
-                let mut stream = loader.open(scheme, path)?;
-                std::io::Read::read_to_end(&mut stream, &mut bytes)
-                    .map_err(|error| Error::Load(error.to_string()))?;
-                let mime = loader
-                    .mime(scheme, path)
-                    .unwrap_or_else(|| "text/html".to_string());
-                let (url, blob) = self.blob_url(&bytes, &mime)?;
                 Ok((url, Some(blob)))
             }
         }
@@ -301,16 +284,6 @@ impl WebViewBackend for WebBackend {
         if let Some(parent) = surface.clip.parent_node() {
             let _ = parent.remove_child(&surface.clip);
         }
-    }
-
-    fn set_scheme_loader(&mut self, loader: std::sync::Arc<dyn crate::host::SchemeLoader>) {
-        self.loader = Some(loader);
-    }
-
-    fn supports_local(&self) -> bool {
-        // Blob URLs are always available; without a loader, `create` reports
-        // `Unsupported`.
-        true
     }
 
     fn events(&mut self) -> Vec<WebViewEvent> {
