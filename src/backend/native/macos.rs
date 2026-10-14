@@ -227,7 +227,7 @@ fn build_builder(
         })
         .with_visible(false)
         .with_focused(false)
-        .with_devtools(false)
+        .with_devtools(spec.policy.engine.devtools)
         .with_navigation_handler(move |url| match policy.navigation {
             crate::spec::Navigation::Allow => true,
             crate::spec::Navigation::OpenExternal => {

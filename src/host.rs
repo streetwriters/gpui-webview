@@ -1,5 +1,6 @@
 //! The backend contract: one implementation per platform, one instance per
-//! window (EMBEDS.md §8/§9).
+//! process window (EMBEDS.md §8/§9). (On Linux the nested backend itself is
+//! process-wide; the manager is the per-window piece.)
 //!
 //! `attach` hands the backend the window's raw handle once. After that every
 //! call is state or geometry, so a host can drive the surface from its render
@@ -7,7 +8,9 @@
 
 use gpui_kit::{Window, px};
 
-use crate::spec::{Error, Placement, Presentation, Result, Source, SurfaceId, SurfaceSpec};
+use crate::spec::{
+    Error, OverlayBehavior, Placement, Presentation, Result, Source, SurfaceId, SurfaceSpec,
+};
 
 /// A seekable, owned byte stream for `Source::Local` content (a web clip's
 /// saved page). Boxed through a blanket impl; produced by an app's
@@ -91,14 +94,34 @@ pub trait WebViewBackend: 'static {
         None
     }
 
+    /// The native popups (context menus, `<select>` dropdowns) currently mapped
+    /// above `id`'s surface, in paint order (bottom to top). Only
+    /// self-compositing backends produce these; empty everywhere else and when
+    /// nothing is open.
+    fn popup_frames(&mut self, _id: SurfaceId) -> Vec<crate::spec::PopupFrame> {
+        Vec::new()
+    }
+
     /// Forwards one input event to a surface. Only self-compositing backends
     /// consume it; child-view backends ignore it (their platform view already
     /// got the event).
     fn input(&mut self, _id: SurfaceId, _event: crate::spec::WebInputEvent) {}
 
-    /// Whether the backend currently routes keyboard focus into the surface.
-    fn is_focused(&self, _id: SurfaceId) -> bool {
-        let _ = _id;
+    /// What `Config::on_overlay` this backend can honour: a self-compositing
+    /// backend paints through GPUI's own scene, so overlays composite above the
+    /// live page; a child-view backend must freeze until the transparent-hole
+    /// pattern lands. The default is `Freeze`; see
+    /// [`crate::WebViews::platform_overlay_behavior`].
+    fn default_overlay_behavior(&self) -> OverlayBehavior {
+        OverlayBehavior::Freeze
+    }
+
+    /// Whether the backend has more client work to pump through (a GTK/WebKit
+    /// frame in flight, an animation ticking) and the app should schedule one
+    /// more animation frame. `false` everywhere else, and for an idle surface.
+    /// The nested backend sets it while `pump_gtk` drained anything, so the
+    /// commit → pump → paint loop cannot stall between commits.
+    fn wants_animation_frame(&mut self) -> bool {
         false
     }
 

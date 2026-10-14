@@ -20,7 +20,6 @@ struct MockState {
     created: Vec<SurfaceId>,
     created_specs: Vec<(SurfaceId, SurfaceSpec)>,
     inputs: Vec<(SurfaceId, WebInputEvent)>,
-    focused: std::collections::HashSet<SurfaceId>,
     frame_image: Option<crate::spec::SurfaceFrame>,
     navigated: Vec<(SurfaceId, SurfaceSpec)>,
     destroyed: Vec<SurfaceId>,
@@ -170,11 +169,6 @@ impl WebViewBackend for MockBackend {
     fn set_focus(&mut self, id: SurfaceId, focused: bool) {
         if let Ok(mut state) = self.state.lock() {
             state.focus.push((id, focused));
-            if focused {
-                state.focused.insert(id);
-            } else {
-                state.focused.remove(&id);
-            }
         }
     }
 
@@ -186,10 +180,6 @@ impl WebViewBackend for MockBackend {
         if let Ok(mut state) = self.state.lock() {
             state.inputs.push((id, event));
         }
-    }
-
-    fn is_focused(&self, id: SurfaceId) -> bool {
-        self.read(|state| state.focused.contains(&id))
     }
 
     fn present(&mut self, id: SurfaceId, mode: Presentation) -> Result<()> {

@@ -33,6 +33,12 @@
 //!     "YouTube",
 //! );
 //! spec.policy.referrer = None; // set the host's `corsHost` origin here
+//! // The page may run scripts and keep storage; the *engine* stays a viewer:
+//! // `Policy::media()`'s `engine` field is all-off (no devtools, no engine
+//! // context menu, no engine fullscreen, no camera/microphone). Flip one on
+//! // for a host that wants it, or set `GPUI_WEBVIEW_DEVTOOLS=1` to inspect a
+//! // live embed while debugging the nested Linux backend.
+//! spec.policy.engine.devtools = false;
 //! // `activate` returns `Err(Error::Unsupported)` when no backend is
 //! // available; the application then keeps its poster and opens the URL.
 //! # let _ = spec;
@@ -61,18 +67,25 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod backend;
+#[cfg(all(target_os = "linux", any(feature = "nested", feature = "dma-buf")))]
+mod debug;
 pub mod host;
+pub mod keys;
 pub mod manager;
 #[cfg(feature = "mock")]
 pub mod mock;
 pub mod spec;
 
 pub use host::{ReadSeek, SchemeLoader, UnsupportedBackend, WebViewBackend};
+pub use keys::physical_key;
 pub use manager::WebViews;
 pub use spec::{
-    Config, Error, Navigation, OverlayBehavior, Placement, Policy, Presentation, Result, Source,
-    Storage, SurfaceFrame, SurfaceId, SurfaceSpec, WebInputEvent, WebViewEvent,
+    Config, ContextMenu, Engine, Error, Navigation, OverlayBehavior, Placement, PointerButton,
+    Policy, PopupFrame, Presentation, Result, Source, Storage, SurfaceContent, SurfaceFrame,
+    SurfaceId, SurfaceSpec, WebInputEvent, WebViewEvent,
 };
+#[cfg(all(target_os = "linux", feature = "dma-buf"))]
+pub use spec::{DmaBufFrame, DmaBufPlane};
 
 /// The crate's version, for host diagnostics.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
