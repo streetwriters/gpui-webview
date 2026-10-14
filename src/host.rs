@@ -107,6 +107,12 @@ pub trait WebViewBackend: 'static {
     /// user's keyboard shows. Default: no-op.
     fn set_keyboard_layout(&mut self, _name: &str) {}
 
+    /// The host window's scale factor (GPUI's `Window::scale_factor`, e.g.
+    /// `2.0` on a HiDPI screen). A backend whose client renders off-screen
+    /// renders at this density, so the page is sharp instead of upscaled.
+    /// Default: no-op.
+    fn set_scale_factor(&mut self, _scale: f32) {}
+
     /// Sets the streaming source for `Source::Local` (once, before any `create`).
     fn set_scheme_loader(&mut self, _loader: std::sync::Arc<dyn SchemeLoader>) {}
 

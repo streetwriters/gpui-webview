@@ -18,6 +18,7 @@ use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::utils::Buffer;
 use smithay::utils::Logical;
 use smithay::utils::Rectangle;
 use smithay::wayland::compositor::BufferAssignment;
@@ -72,9 +73,10 @@ impl HeldBuffer {
 }
 
 /// The content rect of a commit clamped to the buffer: the client's window
-/// geometry when sane, the whole buffer otherwise. Shared by both transports.
+/// geometry (in buffer pixels, see `buffer_geometry`) when sane, the whole
+/// buffer otherwise. Shared by both transports.
 pub(super) fn content_rect(
-    geometry: Option<smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
+    geometry: Option<Rectangle<i32, Buffer>>,
     buffer_width: u32,
     buffer_height: u32,
 ) -> Option<(u32, u32, u32, u32)> {
@@ -315,6 +317,15 @@ pub(super) fn content_geometry(surface: &WlSurface) -> Option<Rectangle<i32, Log
     })
 }
 
+/// `geometry` (surface-local, logical) in the pixels of a buffer committed at
+/// `scale` (`wl_surface.set_buffer_scale`).
+fn buffer_geometry(geometry: Rectangle<i32, Logical>, scale: i32) -> Rectangle<i32, Buffer> {
+    Rectangle::new(
+        (geometry.loc.x * scale, geometry.loc.y * scale).into(),
+        (geometry.size.w * scale, geometry.size.h * scale).into(),
+    )
+}
+
 /// Turns the committed buffer into a frame: dma-buf with the buffer held, or copied pixels with it released.
 impl NestedState {
     pub(super) fn take_committed(
@@ -325,14 +336,21 @@ impl NestedState {
     ) -> CommittedBuffer {
         #[cfg(not(dmabuf))]
         let _ = sequence;
-        let assignment = smithay::wayland::compositor::with_states(surface, |states| {
-            states
-                .cached_state
-                .get::<SurfaceAttributes>()
-                .current()
-                .buffer
-                .take()
+        let (assignment, scale) = smithay::wayland::compositor::with_states(surface, |states| {
+            let mut attributes = states.cached_state.get::<SurfaceAttributes>();
+            let attributes = attributes.current();
+            (attributes.buffer.take(), attributes.buffer_scale.max(1))
         });
+        // The crop is in buffer pixels; the frame's size stays logical, so a
+        // denser buffer paints at the same place, only sharper.
+        let geometry = geometry.map(|geometry| buffer_geometry(geometry, scale));
+        let logical = |mut frame: SurfaceFrame| {
+            frame.size = (
+                frame.size.0.div_ceil(scale as u32),
+                frame.size.1.div_ceil(scale as u32),
+            );
+            frame
+        };
         match assignment {
             Some(BufferAssignment::NewBuffer(buffer)) => {
                 #[cfg(dmabuf)]
@@ -341,7 +359,7 @@ impl NestedState {
                     let key = self.buffer_key(&buffer);
                     return match dmabuf_frame(key, &dmabuf, geometry, sequence) {
                         Some(frame) => CommittedBuffer::New {
-                            frame,
+                            frame: logical(frame),
                             hold: Some(buffer),
                         },
                         None => {
@@ -354,7 +372,10 @@ impl NestedState {
                 let frame = copy_shm_buffer(&buffer, geometry);
                 buffer.release();
                 match frame {
-                    Some(frame) => CommittedBuffer::New { frame, hold: None },
+                    Some(frame) => CommittedBuffer::New {
+                        frame: logical(frame),
+                        hold: None,
+                    },
                     None => CommittedBuffer::Rejected,
                 }
             }
@@ -370,7 +391,7 @@ impl NestedState {
 pub(super) fn dmabuf_frame(
     key: u64,
     dmabuf: &smithay::backend::allocator::dmabuf::Dmabuf,
-    geometry: Option<smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
+    geometry: Option<Rectangle<i32, Buffer>>,
     sequence: u64,
 ) -> Option<SurfaceFrame> {
     use std::os::fd::AsFd;
@@ -428,7 +449,7 @@ pub(super) fn dmabuf_frame(
 /// window geometry; little-endian ARGB/XRGB bytes are already BGRA for `RenderImage`.
 pub(super) fn copy_shm_buffer(
     buffer: &WlBuffer,
-    geometry: Option<smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
+    geometry: Option<Rectangle<i32, Buffer>>,
 ) -> Option<SurfaceFrame> {
     let mut out: Option<SurfaceFrame> = None;
     let _ = shm::with_buffer_contents(buffer, |pointer, length, data| {
@@ -442,7 +463,7 @@ pub(super) fn copy_pixels(
     pointer: *const u8,
     length: usize,
     data: smithay::wayland::shm::BufferData,
-    geometry: Option<smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
+    geometry: Option<Rectangle<i32, Buffer>>,
 ) -> Option<SurfaceFrame> {
     let (buffer_width, buffer_height, stride) = (
         data.width.max(1) as usize,

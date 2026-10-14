@@ -455,6 +455,10 @@ impl WebViewBackend for NestedBackend {
         let _ = self.commands.send(Command::KeyboardLayout(name.to_owned()));
     }
 
+    fn set_scale_factor(&mut self, scale: f32) {
+        let _ = self.commands.send(Command::OutputScale(scale as f64));
+    }
+
     fn surface_presented(&mut self, id: SurfaceId) {
         // Best-effort: the compositor may already be gone.
         let _ = self.commands.send(Command::Presented { id });

@@ -323,20 +323,11 @@ pub(super) fn compositor_main(
             model: "gpui-webview".to_string(),
         },
     );
-    // One output at 1x/60 Hz: GTK needs a monitor (and floods criticals without one).
-    output.change_current_state(
-        Some(Mode {
-            size: Size::from((1920, 1080)),
-            refresh: 60_000,
-        }),
-        Some(Transform::Normal),
-        Some(Scale::Integer(1)),
-        None,
-    );
-    output.set_preferred(Mode {
-        size: Size::from((1920, 1080)),
-        refresh: 60_000,
-    });
+    // One output at 60 Hz: GTK needs a monitor (and floods criticals without
+    // one). 1x until the app reports the window's scale (`set_output_scale`).
+    let (mode, scale) = output_state(1.0);
+    output.set_preferred(mode);
+    output.change_current_state(Some(mode), Some(Transform::Normal), Some(scale), None);
     let _output_global = output.create_global::<NestedState>(&handle);
 
     let mut seat_state = SeatState::<NestedState>::new();
@@ -477,6 +468,48 @@ pub(super) fn compositor_main(
     }
 }
 
+/// The output's mode and scale at the host window's `scale` factor. The mode
+/// grows with the scale, so the logical output stays 1920x1080 at any density.
+/// A fractional scale advertises its ceiling on `wl_output.scale` (smithay's
+/// `Scale::Fractional`): GTK3 renders at integer scales only, and the app
+/// samples the denser frame down into the block.
+fn output_state(scale: f64) -> (Mode, Scale) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let mode = Mode {
+        size: Size::from((
+            (1920.0 * scale).round() as i32,
+            (1080.0 * scale).round() as i32,
+        )),
+        refresh: 60_000,
+    };
+    let scale = if scale.fract() == 0.0 {
+        Scale::Integer(scale as i32)
+    } else {
+        Scale::Fractional(scale)
+    };
+    (mode, scale)
+}
+
+impl NestedState {
+    /// Advertises the host window's scale factor, so clients render at its
+    /// density instead of being upscaled by the app.
+    pub(super) fn set_output_scale(&mut self, scale: f64) {
+        let (mode, scale) = output_state(scale);
+        if self.output.current_scale().fractional_scale() == scale.fractional_scale() {
+            return;
+        }
+        debug_log!("output: scale {:?}, mode {:?}", scale, mode.size);
+        // Preferred first, so the `wl_output.mode` event carries the flag.
+        self.output.set_preferred(mode);
+        self.output
+            .change_current_state(Some(mode), None, Some(scale), None);
+    }
+}
+
 /// Applies one command from the main thread (compositor thread).
 fn apply_command(data: &mut CalloopData, command: Command) {
     match command {
@@ -538,8 +571,9 @@ fn apply_command(data: &mut CalloopData, command: Command) {
             let handle = data.display.handle();
             data.state.enable_dmabuf(&handle, capabilities);
         }
-        // Handled by the channel callback, which stops the loop.
         Command::KeyboardLayout(name) => data.state.set_host_layout(&name),
+        Command::OutputScale(scale) => data.state.set_output_scale(scale),
+        // Handled by the channel callback, which stops the loop.
         Command::Shutdown => {}
     }
 }

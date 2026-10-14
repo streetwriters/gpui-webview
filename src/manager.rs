@@ -163,6 +163,8 @@ pub struct WebViews {
     events: Vec<WebViewEvent>,
     loader: Option<Arc<dyn SchemeLoader>>,
     dmabuf: DmaBufCache,
+    /// The last scale factor forwarded to the backend.
+    scale_factor: Option<f32>,
 }
 
 impl std::fmt::Debug for WebViews {
@@ -238,6 +240,7 @@ impl WebViews {
             events: Vec::new(),
             loader: None,
             dmabuf: DmaBufCache::default(),
+            scale_factor: None,
         }
     }
 
@@ -506,6 +509,16 @@ impl WebViews {
     /// [`WebViewBackend::set_keyboard_layout`]).
     pub fn set_keyboard_layout(&mut self, name: &str) {
         self.backend.set_keyboard_layout(name);
+    }
+
+    /// Forwards the host window's scale factor (see
+    /// [`WebViewBackend::set_scale_factor`]); only changes reach the backend,
+    /// so a caller can report it every paint.
+    pub fn set_scale_factor(&mut self, scale: f32) {
+        if self.scale_factor != Some(scale) {
+            self.scale_factor = Some(scale);
+            self.backend.set_scale_factor(scale);
+        }
     }
 
     /// Reports that `key`'s latest frame was painted (see

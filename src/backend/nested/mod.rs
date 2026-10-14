@@ -76,6 +76,8 @@ pub(super) enum Command {
     DmabufFeedback(gpui_kit::DmaBufCapabilities),
     /// The host's active keyboard layout name; the client keymap follows it.
     KeyboardLayout(String),
+    /// The host window's scale factor; the output advertises it.
+    OutputScale(f64),
     Shutdown,
 }
 

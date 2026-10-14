@@ -416,6 +416,47 @@ mod linux {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
+        fn step_scale(&mut self) {
+            // A HiDPI host: the client renders denser pixels at the same
+            // logical size, so the page is sharp instead of upscaled. GTK3
+            // renders at integer scales only, so 1.5x advertises (and
+            // commits) 2x.
+            let logical = (self.width, self.height);
+            let committed = |h: &mut Self, pixels: (u32, u32)| {
+                h.webviews.frame_image(0).is_some_and(|frame| {
+                    frame.size == logical && frame_pixel_size(&frame) == pixels
+                })
+            };
+            for (scale, factor) in [(2.0, 2), (1.5, 2)] {
+                let dense = (self.width * factor, self.height * factor);
+                self.webviews.set_scale_factor(scale);
+                if !self.until(10, |h| committed(h, dense)) {
+                    let seen = self
+                        .webviews
+                        .frame_image(0)
+                        .map(|frame| (frame.size, frame_pixel_size(&frame)));
+                    fail(&format!(
+                        "scale {scale}: expected a {}x{} frame of {}x{} pixels, got {seen:?}",
+                        logical.0, logical.1, dense.0, dense.1
+                    ));
+                }
+                if self
+                    .pixels()
+                    .is_none_or(|bytes| distinct_colours(&bytes) < 2)
+                {
+                    fail(&format!("scale {scale}: the dense frame is blank"));
+                }
+                println!(
+                    "scale: {}x{} at {scale}x commits {}x{} pixels",
+                    logical.0, logical.1, dense.0, dense.1
+                );
+                // Back to 1x between cases and for the remaining checks.
+                self.webviews.set_scale_factor(1.0);
+                if !self.until(10, |h| committed(h, logical)) {
+                    fail(&format!("scale {scale}: the client never returned to 1x"));
+                }
+            }
+        }
         fn step_navigation(&mut self) {
             // Under `OpenExternal` a remote navigation is refused and reported; the
             // URL is never fetched.
@@ -870,7 +911,7 @@ mod linux {
             height,
             html,
         };
-        let steps: [(&str, fn(&mut Harness)); 12] = [
+        let steps: [(&str, fn(&mut Harness)); 13] = [
             ("script", Harness::step_script),
             ("click", Harness::step_click),
             ("key", Harness::step_key),
@@ -881,6 +922,7 @@ mod linux {
             ("menu", Harness::step_menu),
             ("wheel", Harness::step_wheel),
             ("resize", Harness::step_resize),
+            ("scale", Harness::step_scale),
             ("navigation", Harness::step_navigation),
             ("storage", Harness::step_storage),
         ];
@@ -952,6 +994,17 @@ mod linux {
             }
         }
         seen.len()
+    }
+    /// A frame's size in pixels (its `size` is logical).
+    fn frame_pixel_size(frame: &gpui_webview::SurfaceFrame) -> (u32, u32) {
+        match &frame.content {
+            gpui_webview::SurfaceContent::Image(image) => {
+                let size = image.size(0);
+                (size.width.0 as u32, size.height.0 as u32)
+            }
+            #[cfg(dmabuf)]
+            gpui_webview::SurfaceContent::Dmabuf(dmabuf) => (dmabuf.width, dmabuf.height),
+        }
     }
     /// A frame's pixels, whichever transport carried them: shm is a straight
     /// read, dma-buf goes through the import + readback.
