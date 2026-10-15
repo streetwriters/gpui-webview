@@ -60,7 +60,7 @@ platform-independent core should depend on.
   configured to the block's size, its commits become `SurfaceFrame`s the app
   paints (cropped to `set_window_geometry`, so decoration shadows never reach
   the block), and GPUI input is forwarded as `wl_seat` events. Two transports,
-  the second behind the `dma-buf` feature + patched GPUI crates:
+  the second behind the `dma-buf` feature (our GPUI fork's import API):
   `linux-dmabuf` when the renderer's Vulkan driver can import the buffer
   ([`SurfaceContent::Dmabuf`] → an imported GPU texture, no CPU copy) and
   `wl_shm` everywhere else (a CPU copy per commit). The compositor advertises
@@ -76,13 +76,13 @@ platform-independent core should depend on.
   Limits: no IME (`zwp_text_input_v3`) and no touch (`wl_touch`) forwarding
   yet; CSS cursor images
   (`wl_pointer.set_cursor`) need a GPUI custom-cursor API. The dma-buf
-  transport is behind the `dma-buf` feature and needs the patched GPUI crates
-  (`scripts/gpui-patch.sh`); without that setup the backend runs `wl_shm`.
+  transport is behind the `dma-buf` feature; without it the backend runs
+  `wl_shm`.
 - **Windows**: not started.
-- **GPUI patches** (`dma-buf` external textures): required by the Linux
-  dma-buf transport only, gated behind the `dma-buf` feature and set up by
-  `scripts/gpui-patch.sh`; documented in EMBEDS.md §14. Every backend works
-  without them on `wl_shm`, and vanilla GPUI builds are unaffected.
+- **GPUI changes** (`dma-buf` external textures): carried by our gpui-fast
+  fork (`streetwriters/gpui-fast`, which the app patches GPUI Kit onto); the
+  Linux dma-buf transport is gated behind the `dma-buf` feature (EMBEDS.md
+  §14). Every backend works without it on `wl_shm`.
 
 ## Manual checklist (per backend)
 

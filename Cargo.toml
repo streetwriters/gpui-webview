@@ -35,9 +35,8 @@ wry = [
 nested = ["wry", "dep:smithay", "dep:libc", "dep:gtk", "dep:webkit2gtk", "dep:image"]
 # Optional fast paths; every backend must work without them (EMBEDS.md §14).
 # Linux only: import committed dma-bufs as GPU textures (the `linux-dmabuf`
-# fast path). Requires the patched GPUI crates (`scripts/gpui-patch.sh` +
-# `vendor/gpu-patch`); off by default so a fresh checkout builds vanilla GPUI
-# and runs `wl_shm`. Every backend must work without it (EMBEDS.md §14).
+# fast path), on our GPUI fork's import API; off by default, so the backend
+# runs `wl_shm`. Every backend must work without it (EMBEDS.md §14).
 dma-buf = []
 wayland-surface = []
 # "Open in window" / fullscreen presentations (a separate GPUI window).
@@ -48,7 +47,7 @@ test-support = []
 
 [dependencies]
 anyhow = "1"
-gpui-kit = { version = "0.6.6", default-features = false }
+gpui-kit = { version = "0.7.3", default-features = false }
 # `std::time::Instant` panics on wasm32-unknown-unknown; this is `performance.now()` there.
 web-time = "1"
 
@@ -149,13 +148,13 @@ harness = false
 required-features = ["wry", "test-support"]
 
 [dev-dependencies]
-gpui-kit = { version = "0.6.6", default-features = false, features = ["test-support"] }
+gpui-kit = { version = "0.7.3", default-features = false, features = ["test-support"] }
 
 # The `nested_e2e` test imports and samples committed dma-bufs through the same
 # code the app uses, and builds the compositor's feedback from the same
 # capability query. Linux-only (the test is).
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-gpui_wgpu = { package = "gpui-pre-wgpu", version = "0.3.6" }
+gpui_wgpu = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
 
 # The Windows E2E drives Win32 directly (GDI fallback readback, window and
 # process checks), Windows.Graphics.Capture (the composited-window proof),
