@@ -612,20 +612,23 @@ mod windows_e2e {
                 let https_point = physical(CLIP_X + CLIP_WIDTH / 2., CLIP_Y + 80., scale);
                 let mailto_point = physical(CLIP_X + CLIP_WIDTH / 2., CLIP_Y + 120., scale);
                 if let Some(session) = wgc.as_mut() {
-                    let mut strips_ok = true;
-                    for (label, point) in [("https", https_point), ("mailto", mailto_point)] {
-                        match wait_for_wgc(cx, session, offset, point, PURPLE, 5_000).await {
-                            Some(seen) if seen == PURPLE => {}
-                            other => {
-                                strips_ok = false;
-                                failures.push(format!(
-                                    "the {label} link strip is not on screen ({other:?})"
-                                ));
-                            }
+                    match wait_for_wgc_pair(
+                        cx,
+                        session,
+                        offset,
+                        https_point,
+                        mailto_point,
+                        (PURPLE, PURPLE),
+                        5_000,
+                    )
+                    .await
+                    {
+                        Some(seen) if seen == (PURPLE, PURPLE) => {
+                            println!("PASS the link strips are on screen where they are clicked");
                         }
-                    }
-                    if strips_ok {
-                        println!("PASS the link strips are on screen where they are clicked");
+                        other => failures.push(format!(
+                            "the link strips are not on screen (https, mailto: {other:?})"
+                        )),
                     }
                 }
 
