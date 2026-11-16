@@ -8,9 +8,7 @@ repository = "https://github.com/streetwriters/gpui-webview"
 documentation = "https://github.com/streetwriters/gpui-webview"
 keywords = ["gpui", "webview", "wry", "wasm"]
 categories = ["gui"]
-# Incubating inside the spike workspace until a second project adopts it
-# (EMBEDS.md §15/Open questions). The manifest is publish-ready otherwise:
-# a move out needs no code or manifest change beyond this flag.
+# Not on crates.io yet: GPUI Kit is patched onto our gpui-fast fork.
 publish = false
 
 [features]
@@ -31,12 +29,12 @@ wry = [
     "dep:webview2-com",
 ]
 # Linux only: the in-process nested Wayland compositor (smithay). See
-# `backend/nested.rs` and EMBEDS.md §10.3.
+# `backend/nested/`.
 nested = ["wry", "dep:smithay", "dep:libc", "dep:gtk", "dep:webkit2gtk", "dep:image"]
-# Optional fast paths; every backend must work without them (EMBEDS.md §14).
+# Optional fast paths; every backend must work without them.
 # Linux only: import committed dma-bufs as GPU textures (the `linux-dmabuf`
 # fast path), on our GPUI fork's import API; off by default, so the backend
-# runs `wl_shm`. Every backend must work without it (EMBEDS.md §14).
+# runs `wl_shm`.
 dma-buf = []
 wayland-surface = []
 # "Open in window" / fullscreen presentations (a separate GPUI window).
@@ -81,7 +79,7 @@ optional = true
 default-features = false
 features = ["os-webview"]
 
-# macOS native surface (EMBEDS.md §10.1). Versions track wry's own objc2 set so
+# macOS native surface. Versions track wry's own objc2 set so
 # cargo unifies them into one binding of the same framework crates.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }
@@ -89,7 +87,7 @@ objc2-app-kit = { version = "0.3", optional = true, features = ["std", "NSView"]
 objc2-foundation = { version = "0.3", optional = true, features = ["std", "NSGeometry"] }
 objc2-web-kit = { version = "0.3", optional = true, features = ["std", "WKWebView", "WKWebViewConfiguration", "WKWebpagePreferences"] }
 
-# Windows native surface (EMBEDS.md §10.2): a WebView2 child HWND inside our
+# Windows native surface: a WebView2 child HWND inside our
 # clip container. `windows` carries the Win32 message/geometry API and
 # `webview2-com` the policy handlers (context menu, process failure, new
 # windows, permissions). Both pin the versions wry 0.57 and gpui-pre-windows
@@ -107,8 +105,8 @@ windows = { version = "0.62", optional = true, features = [
 ] }
 webview2-com = { version = "0.39", optional = true }
 
-# Linux native surface (EMBEDS.md §10.3): an in-process nested Wayland
-# compositor built on **smithay** (user decision, 2026-10-12). GTK/WebKitGTK
+# Linux native surface: an in-process nested Wayland
+# compositor built on smithay. GTK/WebKitGTK
 # (through wry) connects to a private socket this process serves; the committed
 # `wl_shm` buffers become GPUI images the app paints.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -136,7 +134,7 @@ path = "tests/nested_e2e.rs"
 harness = false
 required-features = ["nested"]
 
-# Windows end-to-end (`scripts/windows-run.sh`, WG2): a real GPUI window hosts
+# Windows end-to-end: a real GPUI window hosts
 # a live surface; the page is read back with WebView2's own snapshot and the
 # window with Windows.Graphics.Capture (falling back to GDI). `harness = false`
 # so it runs on the main thread (WebView2 requirement); needs an interactive
