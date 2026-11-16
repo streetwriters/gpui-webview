@@ -1,110 +1,131 @@
 # gpui-webview
 
-Pooled, clipped **live web surfaces** for GPUI applications: WKWebView on
-macOS, WebView2 (planned) on Windows, WebKitGTK + a nested Wayland compositor
-(planned) on Linux, and a DOM `<iframe>` overlay on wasm/web. It knows nothing
-about any application's documents — surfaces are keyed by opaque `u64`s and
-content is a URL or HTML bytes.
+[![Tests](https://github.com/streetwriters/gpui-webview/actions/workflows/tests.yml/badge.svg)](https://github.com/streetwriters/gpui-webview/actions/workflows/tests.yml)
 
-This crate is the platform layer behind the Notesnook spike's embed implementation
-(`apps/desktop-gpui-spike/EMBEDS.md`, §7–§15). It lives inside that workspace
-while it incubates; it has **no dependency on the editor or on Notesnook**, and
-a move to its own repository needs no code change.
+Pooled, clipped **live web surfaces** for [GPUI](https://www.gpui.rs)
+applications: WKWebView on macOS, WebView2 on Windows, WebKitGTK inside an
+in-process nested Wayland compositor on Linux, and a DOM `<iframe>` overlay on
+wasm. The crate knows nothing about your documents. Surfaces are keyed by
+opaque `u64`s, and their content is a URL or HTML bytes.
 
 ## Why a pool
 
-A web engine is expensive (tens of MB, ~100 ms to create), and on every desktop
-platform the live view sits in the platform's own layer stack, where GPUI cannot
-freely clip it or draw over it. So:
+A web engine is expensive: tens of MB of memory and about 100 ms to create.
+On every desktop platform the live view also sits in the platform's own layer
+stack, where GPUI can't freely clip it or draw over it. So the crate manages
+engines like this:
 
-- at most `Config::capacity` engines stay alive (1 by default, 2 is the
-  practical desktop maximum);
-- an idle engine is **reused by navigation, never recreated**;
-- a surface is **clipped to the viewport** (the page never relayouts while
-  scrolling — only the visible window changes);
-- an intersecting GPUI overlay **lowers** the surface (`OverlayBehavior::Lower`)
-  or **freezes** it back to the application's poster (`Freeze`);
-- a surface that scrolls fully out is **torn down**.
+- At most `Config::capacity` engines stay alive. The default is 1, and 2 is
+  the practical maximum on desktop.
+- An idle engine is **reused by navigating it, never recreated**.
+- A surface is **clipped to the viewport**. The page never relayouts while
+  scrolling; only the visible part changes.
+- When a GPUI overlay intersects a surface, the surface is either **lowered**
+  (`OverlayBehavior::Lower`) or **frozen** back to the application's poster
+  (`Freeze`).
+- A surface that scrolls fully out of view is **torn down**.
 
 Applications render a cheap native poster by default and activate a live
-surface on demand. `Error::Unsupported` is returned — never a panic — when the
-target, session, or runtime cannot host a surface, so the poster + `openUrl`
-fallback always exists.
+surface on demand. When the target, session or runtime can't host a surface,
+the crate returns `Error::Unsupported` instead of panicking, so the
+application can always fall back to the poster and opening the URL.
 
 ## Features
 
-| Feature          | Target        | Backend                                                       |
-|------------------|---------------|---------------------------------------------------------------|
-| `mock` (default) | any           | recording backend: no engine, every call recorded             |
-| `web`            | wasm32        | clip `<div>` + `<iframe>` over GPUI's canvas                  |
-| `wry`            | macOS         | `WKWebView` in a layer-backed clip container under GPUI's view |
-| `nested`         | Linux         | in-process nested Wayland compositor (smithay) + GTK/WebKitGTK client |
-| `wry`            | Windows       | reports `Error::Platform` (not implemented)                   |
-| `window`         | any           | separate-window/fullscreen presentation (not wired yet)        |
+| Feature          | Target  | What it enables                                                         |
+|------------------|---------|-------------------------------------------------------------------------|
+| `mock` (default) | any     | Recording backend with no engine; every call is recorded                |
+| `web`            | wasm32  | A clip `<div>` + `<iframe>` stacked over GPUI's canvas                  |
+| `wry`            | macOS   | `WKWebView` in a layer-backed clip container under GPUI's view          |
+| `wry`            | Windows | A WebView2 child HWND inside a clip-container HWND                      |
+| `nested`         | Linux   | Nested Wayland compositor (smithay) hosting a GTK/WebKitGTK client      |
+| `dma-buf`        | Linux   | Imports committed dma-bufs as GPU textures instead of copying `wl_shm`  |
+| `window`         | any     | Separate-window/fullscreen presentation (not wired yet)                 |
+| `test-support`   | any     | Hooks used by the platform end-to-end tests (e.g. `page_snapshot`)      |
 
-`--no-default-features` builds the interface only (specs, manager, backend
-trait) with no platform code at all, which is what an application's
-platform-independent core should depend on.
+`--no-default-features` builds only the interface (specs, manager and backend
+trait) with no platform code. Depend on it this way from an application's
+platform-independent core.
 
-## Status
+## Platform status
 
-- **macOS (`wry`)**: implemented. `WKWebView` in a `masksToBounds` container;
-  script/incognito/navigation policies from `Policy`, and the engine toggles
-  from `Policy::engine` (`with_devtools` follows `engine.devtools`); overlays
-  freeze. Compile verified; the manual GUI checklist (below) is still required.
-- **wasm (`web`)**: implemented. Compile verified; the per-frame placement and
-  z-index assertions live in the host's page tests.
-- **Linux (`nested`)**: implemented and **runtime-verified headless**. The
-  compositor runs on its own thread (a same-thread design deadlocks in
-  `gtk_init`); each surface's GTK/WebKitGTK window is an `xdg_toplevel`
-  configured to the block's size, its commits become `SurfaceFrame`s the app
-  paints (cropped to `set_window_geometry`, so decoration shadows never reach
-  the block), and GPUI input is forwarded as `wl_seat` events. Two transports,
-  the second behind the `dma-buf` feature (our GPUI fork's import API):
-  `linux-dmabuf` when the renderer's Vulkan driver can import the buffer
-  ([`SurfaceContent::Dmabuf`] → an imported GPU texture, no CPU copy) and
-  `wl_shm` everywhere else (a CPU copy per commit). The compositor advertises
-  exactly the renderer's importable formats, so a client never sends a buffer
-  the app cannot sample. `cargo test -p gpui-webview --features nested` runs a
-  real end-to-end test (`tests/nested_e2e.rs`) that needs no display; it passes
-  in a bare container (shm) and asserts the imported pixels on a GPU machine
-  (`E2E_DMABUF=1`).
-  The clipboard and primary selection are bridged as text (the app writes
-  `WebViewEvent::SelectionChanged` to GPUI and offers the host's text with
-  `WebViews::set_host_selection`); in-page drag-and-drop works, but the drag
-  icon is not painted and host file drops are not forwarded.
-  Limits: no IME (`zwp_text_input_v3`) and no touch (`wl_touch`) forwarding
-  yet; CSS cursor images
-  (`wl_pointer.set_cursor`) need a GPUI custom-cursor API. The dma-buf
-  transport is behind the `dma-buf` feature; without it the backend runs
-  `wl_shm`.
-- **Windows**: not started.
-- **GPUI changes** (`dma-buf` external textures): carried by our gpui-fast
-  fork (`streetwriters/gpui-fast`, which the app patches GPUI Kit onto); the
-  Linux dma-buf transport is gated behind the `dma-buf` feature (EMBEDS.md
-  §14). Every backend works without it on `wl_shm`.
+- **macOS (`wry`)**: `WKWebView` in a `masksToBounds` container. Script,
+  incognito and navigation policies come from `Policy`, and engine toggles
+  come from `Policy::engine` (`with_devtools` follows `engine.devtools`).
+  Overlays freeze the surface.
+- **Windows (`wry`)**: a WebView2 child HWND inside a clip-container HWND. The
+  container is the visible clip, and the webview keeps its full size and
+  slides inside it, so scrolling never relayouts the page. GPUI must present
+  through a flip-model swapchain (`prepare_process`); otherwise its
+  DirectComposition target draws above every child HWND. Overlays freeze the
+  surface.
+- **Linux (`nested`)**: the compositor runs on its own thread, because a
+  same-thread design deadlocks in `gtk_init`. Each surface's GTK/WebKitGTK
+  window is an `xdg_toplevel` sized to its block, and every commit becomes a
+  `SurfaceFrame` that the app paints. Frames are cropped to
+  `set_window_geometry`, so decoration shadows never reach the block. GPUI
+  input is forwarded as `wl_seat` events.
+  - **Frame transports**: with the `dma-buf` feature, buffers the renderer's
+    Vulkan driver can import arrive as `SurfaceContent::Dmabuf` and are
+    imported as GPU textures with no CPU copy. Everything else uses `wl_shm`,
+    with one CPU copy per commit. The compositor advertises only the formats
+    the renderer can import.
+  - **Clipboard and selection**: the clipboard and primary selection are
+    bridged as text.
+  - **Drag and drop**: in-page drag-and-drop works, but the drag icon isn't
+    painted and file drops from the host aren't forwarded.
+  - **Not yet supported**: IME (`zwp_text_input_v3`), touch (`wl_touch`), and
+    CSS cursor images (needs a GPUI custom-cursor API).
+- **wasm (`web`)**: implemented; the crate only checks that it compiles, and
+  the application tests placement and z-index.
 
-## Manual checklist (per backend)
+### GPUI fork
 
-Create → place → clip at the viewport → scroll a clipped surface → overlay a
-menu → teardown → RSS back to baseline → second activation reuses the engine
-(no extra process) at 1x, then at 2x (the nested backend advertises the window's
-scale; a fractional one renders at its ceiling and is sampled down).
-Security: a clip with `<script>` runs nothing, and links leave through
-`OpenExternal`.
+The `dma-buf` path needs an external-texture import API that upstream GPUI
+doesn't have. This crate patches GPUI Kit's `gpui-pre` crates onto
+[`streetwriters/gpui-fast`](https://github.com/streetwriters/gpui-fast) (see
+`[patch.crates-io]` in `Cargo.toml`). Applications that use the crate need the
+same patch. Every backend works without `dma-buf`.
+
+## Debugging
+
+`GPUI_WEBVIEW_DEBUG=1` traces protocol milestones (connections, toplevel
+mapping, first commits, dma-buf feedback, popup lifecycle) to stderr.
+`GPUI_WEBVIEW_DEBUG=2` adds per-event traces: input events, commits, and
+frame-callback counts.
 
 ## Example
 
 ```sh
-cargo run -p gpui-webview --example demo                       # 6 posters
-cargo run -p gpui-webview --features wry --example demo -- 20  # live on macOS
+cargo run --example demo                       # 6 posters
+cargo run --features wry --example demo -- 20  # live surfaces on macOS
 ```
 
 ## Testing
 
 ```sh
-cargo test -p gpui-webview                       # policy + manager contract
-cargo test -p gpui-webview --features wry        # + the native backend compiles
-cargo build -p gpui-webview --no-default-features
-cargo tree -p gpui-webview                       # no editor/Notesnook dependency
+cargo test                                   # policy + manager contract (mock backend)
+cargo test --features wry                    # + the native backend compiles
+cargo build --no-default-features            # interface only
+cargo test --features nested --test nested_e2e   # Linux, needs GTK3 + WebKitGTK 4.1
 ```
+
+`nested_e2e` runs the real compositor headless and needs no display. It
+passes in a bare container on `wl_shm`. On a GPU machine, run it with the
+`dma-buf` feature and `E2E_DMABUF=1` to assert the imported pixels.
+
+`windows_e2e` (`--features wry,test-support`) needs an interactive Windows
+session and the WebView2 Runtime. It hosts a live surface in a real GPUI
+window, then checks the page with WebView2's own snapshot and the window
+with `Windows.Graphics.Capture`.
+
+Checklist for testing a backend by hand: create a surface, place it, clip it
+at the viewport, scroll it while clipped, open a menu over it, and tear it
+down. Memory (RSS) should return to its starting level, and a second
+activation should reuse the engine without starting another process. Repeat
+at 1x and 2x scale. Also check security: a clip containing `<script>` must run
+nothing, and links must leave through `OpenExternal`.
+
+## License
+
+GPL-3.0-or-later
