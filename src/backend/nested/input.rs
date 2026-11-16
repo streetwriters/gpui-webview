@@ -206,7 +206,7 @@ pub(super) fn apply_input(state: &mut NestedState, id: SurfaceId, event: WebInpu
 }
 
 /// The four modifier flags, in the same order as [`MODIFIER_CODES`].
-fn modifier_keys(modifiers: gpui_kit::Modifiers) -> [bool; 4] {
+fn modifier_keys(modifiers: gpui::Modifiers) -> [bool; 4] {
     [
         modifiers.shift,
         modifiers.control,
@@ -234,7 +234,7 @@ pub(super) fn send_key(state: &mut NestedState, code: u32, key_state: KeyState) 
 }
 
 /// Presses any missing modifier; never releases (T9).
-pub(super) fn press_missing_modifiers(state: &mut NestedState, modifiers: gpui_kit::Modifiers) {
+pub(super) fn press_missing_modifiers(state: &mut NestedState, modifiers: gpui::Modifiers) {
     let current = state.modifiers;
     let mut next = current;
     next.shift |= modifiers.shift;
@@ -255,7 +255,7 @@ pub(super) fn press_missing_modifiers(state: &mut NestedState, modifiers: gpui_k
 }
 
 /// Presses/releases the protocol modifier keys to match `modifiers` (T9).
-pub(super) fn set_protocol_modifiers(state: &mut NestedState, modifiers: gpui_kit::Modifiers) {
+pub(super) fn set_protocol_modifiers(state: &mut NestedState, modifiers: gpui::Modifiers) {
     if state.modifiers == modifiers {
         return;
     }

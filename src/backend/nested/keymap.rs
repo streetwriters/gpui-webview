@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use gpui_kit::Keystroke;
+use gpui::Keystroke;
 use smithay::input::keyboard::{Keysym, XkbConfig, xkb};
 
 use super::compositor::NestedState;

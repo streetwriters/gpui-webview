@@ -76,7 +76,7 @@ pub(super) enum Command {
     },
     /// The renderer's importable formats, advertised as `linux-dmabuf` feedback.
     #[cfg(dmabuf)]
-    DmabufFeedback(gpui_kit::DmaBufCapabilities),
+    DmabufFeedback(gpui::DmaBufCapabilities),
     /// The host's active keyboard layout name; the client keymap follows it.
     KeyboardLayout(String),
     /// The host window's scale factor; the output advertises it.

@@ -16,7 +16,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use gpui_kit::Window;
+use gpui::Window;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR,
     ICoreWebView2, ICoreWebView2_11, ICoreWebView2ContextMenuItemCollection,

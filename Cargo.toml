@@ -45,7 +45,7 @@ test-support = []
 
 [dependencies]
 anyhow = "1"
-gpui-kit = { version = "0.9.1", default-features = false }
+gpui = { version = "0.2.2", default-features = false }
 # `std::time::Instant` panics on wasm32-unknown-unknown; this is `performance.now()` there.
 web-time = "1"
 
@@ -184,6 +184,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 # GPUI Kit's `gpui-pre` crates come from our fork (dma-buf imports, Linux fixes).
 [patch.crates-io]
+gpui = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
 gpui-pre = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
 gpui-pre-macros = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
 gpui-pre-platform = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }

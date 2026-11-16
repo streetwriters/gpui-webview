@@ -2,7 +2,7 @@
 //! Linux the backend is process-wide and the manager is per window. `attach`
 //! hands over the window once; everything after is state or geometry.
 
-use gpui_kit::{Window, px};
+use gpui::{Window, px};
 
 use crate::spec::{
     Error, OverlayBehavior, Placement, Presentation, Result, Source, SurfaceId, SurfaceSpec,
@@ -122,7 +122,7 @@ pub trait WebViewBackend: 'static {
 
 /// The block's box from a placement, without the clip (the backend clips).
 #[allow(dead_code)] // Used by the platform backends behind features.
-pub(crate) fn surface_rect(at: &Placement) -> gpui_kit::Bounds<gpui_kit::Pixels> {
+pub(crate) fn surface_rect(at: &Placement) -> gpui::Bounds<gpui::Pixels> {
     at.rect
 }
 
@@ -136,8 +136,8 @@ pub(crate) fn is_loading_geometry(url: &str) -> bool {
 
 /// Zero bounds, used by backends that hide a surface by moving it out.
 #[allow(dead_code)] // Used by the platform backends behind features.
-pub(crate) fn empty_bounds() -> gpui_kit::Bounds<gpui_kit::Pixels> {
-    use gpui_kit::{Bounds, point, size};
+pub(crate) fn empty_bounds() -> gpui::Bounds<gpui::Pixels> {
+    use gpui::{Bounds, point, size};
     Bounds::new(point(px(0.), px(0.)), size(px(0.), px(0.)))
 }
 

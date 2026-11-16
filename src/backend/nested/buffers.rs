@@ -116,7 +116,7 @@ impl NestedState {
     pub(super) fn enable_dmabuf(
         &mut self,
         display: &smithay::reexports::wayland_server::DisplayHandle,
-        capabilities: gpui_kit::DmaBufCapabilities,
+        capabilities: gpui::DmaBufCapabilities,
     ) -> bool {
         if self.dmabuf_global.is_some() {
             // `attach` runs after `new_with_dmabuf` in tests; a second global would duplicate it.
@@ -500,7 +500,7 @@ pub(super) fn copy_pixels(
     }
     let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels)?;
     Some(SurfaceFrame::from_image(
-        Arc::new(gpui_kit::RenderImage::new(vec![image::Frame::new(image)])),
+        Arc::new(gpui::RenderImage::new(vec![image::Frame::new(image)])),
         (width as u32, height as u32),
     ))
 }

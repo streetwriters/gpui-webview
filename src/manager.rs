@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use gpui_kit::{Bounds, Pixels, Window};
+use gpui::{Bounds, Pixels, Window};
 
 use crate::host::{WebViewBackend, spec_supported};
 pub use crate::spec::WebViewEvent as Event;
@@ -36,7 +36,7 @@ struct Surface {
 #[derive(Default)]
 struct DmaBufCache {
     #[cfg(dmabuf)]
-    textures: std::collections::HashMap<(SurfaceId, u64), Vec<(u64, gpui_kit::ExternalTexture)>>,
+    textures: std::collections::HashMap<(SurfaceId, u64), Vec<(u64, gpui::ExternalTexture)>>,
     #[cfg(dmabuf)]
     failed: std::collections::HashMap<(SurfaceId, u64), Vec<u64>>,
 }
@@ -84,7 +84,7 @@ impl DmaBufCache {
         slot: (SurfaceId, u64),
         content: &crate::spec::SurfaceContent,
         window: &mut Window,
-    ) -> Option<gpui_kit::ExternalTexture> {
+    ) -> Option<gpui::ExternalTexture> {
         use crate::spec::SurfaceContent;
 
         let SurfaceContent::Dmabuf(frame) = content else {
@@ -103,7 +103,7 @@ impl DmaBufCache {
             return Some(texture.clone());
         }
 
-        let descriptor = gpui_kit::DmaBufDescriptor {
+        let descriptor = gpui::DmaBufDescriptor {
             width: frame.width,
             height: frame.height,
             fourcc: frame.fourcc,
@@ -111,7 +111,7 @@ impl DmaBufCache {
             planes: frame
                 .planes
                 .iter()
-                .map(|plane| gpui_kit::DmaBufPlane {
+                .map(|plane| gpui::DmaBufPlane {
                     fd: std::os::fd::AsRawFd::as_raw_fd(&*plane.fd),
                     offset: plane.offset,
                     stride: plane.stride,
@@ -689,7 +689,7 @@ mod tests {
     use super::*;
     use crate::mock::MockBackend;
     use crate::spec::{Policy, Source};
-    use gpui_kit::{point, px, size};
+    use gpui::{point, px, size};
 
     fn spec(label: &str) -> SurfaceSpec {
         SurfaceSpec::new(
@@ -909,7 +909,7 @@ mod tests {
         let mut webviews = manager(mock, Config::default());
         let id = webviews.activate(1, spec("a")).expect("activate");
         let key = |pressed| crate::spec::WebInputEvent::Key {
-            keystroke: gpui_kit::Keystroke {
+            keystroke: gpui::Keystroke {
                 modifiers: Default::default(),
                 key: "a".into(),
                 key_char: Some("a".into()),

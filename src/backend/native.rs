@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use gpui_kit::Window;
+use gpui::Window;
 
 use crate::host::WebViewBackend;
 use crate::spec::{Error, Placement, Presentation, Result, SurfaceId, SurfaceSpec, WebViewEvent};

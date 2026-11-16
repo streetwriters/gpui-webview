@@ -3,8 +3,8 @@
 //! touches `ExternalTexture` or `SurfaceContent` itself.
 
 #[cfg(dmabuf)]
-use gpui_kit::ContentMask;
-use gpui_kit::{Bounds, Corners, Pixels, Window};
+use gpui::ContentMask;
+use gpui::{Bounds, Corners, Pixels, Window};
 
 use crate::spec::{SurfaceContent, SurfaceFrame};
 
@@ -15,7 +15,7 @@ use crate::spec::{SurfaceContent, SurfaceFrame};
 pub struct ReadyFrame {
     pub(crate) frame: SurfaceFrame,
     #[cfg(dmabuf)]
-    pub(crate) texture: Option<gpui_kit::ExternalTexture>,
+    pub(crate) texture: Option<gpui::ExternalTexture>,
 }
 
 impl ReadyFrame {

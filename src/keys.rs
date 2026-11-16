@@ -5,7 +5,7 @@
 //! the base name. A page needs the physical key; [`physical_key`] is the one
 //! place that maps to it (the editor tracks held keys by its result).
 
-use gpui_kit::Keystroke;
+use gpui::Keystroke;
 
 /// The physical key a keystroke names, as an evdev code (the space smithay's
 /// keymap consumes). The name is tried first, then `key_char`; unknown keys

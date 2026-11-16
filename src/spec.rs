@@ -2,7 +2,7 @@
 //!
 //! The crate enforces the [`Policy`] it is handed; the caller decides it.
 
-use gpui_kit::{Bounds, Pixels, SharedString, px};
+use gpui::{Bounds, Pixels, SharedString, px};
 
 /// An opaque live-surface handle; the manager mints it, everyone else passes it back.
 pub type SurfaceId = u64;
@@ -267,7 +267,7 @@ pub struct SurfaceFrame {
 
 impl SurfaceFrame {
     /// A frame of copied pixels (the `wl_shm` path).
-    pub fn from_image(image: std::sync::Arc<gpui_kit::RenderImage>, size: (u32, u32)) -> Self {
+    pub fn from_image(image: std::sync::Arc<gpui::RenderImage>, size: (u32, u32)) -> Self {
         Self {
             content: SurfaceContent::Image(image),
             size,
@@ -275,7 +275,7 @@ impl SurfaceFrame {
     }
 
     /// The pixels, when this is a CPU-copied frame.
-    pub fn image(&self) -> Option<&std::sync::Arc<gpui_kit::RenderImage>> {
+    pub fn image(&self) -> Option<&std::sync::Arc<gpui::RenderImage>> {
         match &self.content {
             SurfaceContent::Image(image) => Some(image),
             #[cfg(dmabuf)]
@@ -307,7 +307,7 @@ impl std::fmt::Debug for SurfaceFrame {
 #[derive(Clone, Debug)]
 pub enum SurfaceContent {
     /// Pixels copied on the CPU (the `wl_shm` path), in GPUI's BGRA form.
-    Image(std::sync::Arc<gpui_kit::RenderImage>),
+    Image(std::sync::Arc<gpui::RenderImage>),
     /// A dma-buf the app imports into a GPU texture. Its fds stay open until the
     /// last clone drops.
     #[cfg(dmabuf)]
@@ -415,13 +415,13 @@ pub enum WebInputEvent {
     },
     /// A key press/release; the backend maps it to the keymap it sent the client.
     Key {
-        keystroke: gpui_kit::Keystroke,
+        keystroke: gpui::Keystroke,
         pressed: bool,
     },
     /// The held modifier set changed without another key; the backend matches the
     /// protocol modifier keys (T9).
     Modifiers {
-        modifiers: gpui_kit::Modifiers,
+        modifiers: gpui::Modifiers,
     },
 }
 
@@ -517,7 +517,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_kit::{point, px, size};
+    use gpui::{point, px, size};
 
     #[test]
     fn strict_policy_is_the_clip_policy() {

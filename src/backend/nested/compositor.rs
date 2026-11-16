@@ -179,7 +179,7 @@ pub struct NestedState {
     #[cfg(dmabuf)]
     pub(super) next_buffer_generation: u64,
     /// T9: the modifiers currently held client-side (GPUI sends no modifier-only key events).
-    pub(super) modifiers: gpui_kit::Modifiers,
+    pub(super) modifiers: gpui::Modifiers,
     /// The maps shared with the main thread.
     pub(super) shared: Arc<Shared>,
     /// A monotonic clock for the millisecond timestamps the protocol wants.
@@ -227,7 +227,7 @@ impl NestedState {
             keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
         }
         // A stale held-modifier state would swallow the next surface's first press.
-        self.modifiers = gpui_kit::Modifiers::default();
+        self.modifiers = gpui::Modifiers::default();
     }
 
     /// The rectangle popups are fitted into; falls back to the configured size.
@@ -389,7 +389,7 @@ pub(super) fn compositor_main(
         buffer_generations: HashMap::new(),
         #[cfg(dmabuf)]
         next_buffer_generation: 0,
-        modifiers: gpui_kit::Modifiers::default(),
+        modifiers: gpui::Modifiers::default(),
         shared,
         epoch: std::time::Instant::now(),
     };

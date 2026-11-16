@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use gpui_kit::Window;
+use gpui::Window;
 use wasm_bindgen::JsCast;
 
 use crate::host::WebViewBackend;

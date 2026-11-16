@@ -15,7 +15,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use gpui_kit::Window;
+use gpui::Window;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly, msg_send, rc::autoreleasepool};

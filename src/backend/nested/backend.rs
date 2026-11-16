@@ -15,7 +15,7 @@ use crate::spec::SurfaceId;
 use crate::spec::SurfaceSpec;
 use crate::spec::WebInputEvent;
 use crate::spec::WebViewEvent;
-use gpui_kit::Window;
+use gpui::Window;
 use smithay::reexports::calloop::channel::Sender as CommandSender;
 use smithay::reexports::calloop::channel::channel;
 use smithay::reexports::wayland_server::ListeningSocket;
@@ -79,7 +79,7 @@ impl NestedBackend {
     /// Like [`Self::new`], with dma-buf capabilities up front (headless E2E).
     /// Only built with `dma-buf`.
     #[cfg(dmabuf)]
-    pub fn new_with_dmabuf(capabilities: Option<gpui_kit::DmaBufCapabilities>) -> Result<Self> {
+    pub fn new_with_dmabuf(capabilities: Option<gpui::DmaBufCapabilities>) -> Result<Self> {
         let backend = Self::start()?;
         if let Some(capabilities) = capabilities {
             let _ = backend.commands.send(Command::DmabufFeedback(capabilities));
