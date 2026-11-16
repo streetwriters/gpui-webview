@@ -524,6 +524,9 @@ mod windows_e2e {
                     )),
                 }
                 let after = webview2_processes();
+                let _ = std::process::Command::new("powershell")
+                    .args(["-NoProfile", "-Command", "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | ForEach-Object { '{0} parent={1} start={2} {3}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToString('HH:mm:ss.fff'), (($_.CommandLine -split ' ' | Where-Object { $_ -like '--type=*' -or $_ -like '--utility-sub-type=*' }) -join ' ') }"])
+                    .status();
                 if after > before {
                     failures.push(format!(
                         "navigate grew the WebView2 process tree: {before} -> {after}"
