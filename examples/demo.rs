@@ -352,10 +352,9 @@ fn main() {
     gpui_kit::application().run(|cx| {
         gpui_kit::init(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([
-            KeyBinding::new("secondary-q", Quit, None),
-            KeyBinding::new("escape", Deactivate, Some("Demo")),
-        ]);
+        let quit = KeyBinding::load("secondary-q", Box::new(Quit), None, false, None, cx)
+            .expect("valid quit keystroke");
+        cx.bind_keys([quit, KeyBinding::new("escape", Deactivate, Some("Demo"))]);
         cx.spawn(async move |cx| {
             cx.open_window(WindowOptions::default(), |window, cx| {
                 cx.new(|cx| Demo::new(window, cx))
