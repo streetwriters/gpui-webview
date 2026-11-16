@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 description = "Pooled, clipped live web surfaces for GPUI applications (WKWebView / WebView2 / WebKitGTK / wasm iframe)"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/streetwriters/notesnook"
-documentation = "https://github.com/streetwriters/notesnook/tree/main/apps/desktop-gpui-spike/crates/gpui-webview"
+repository = "https://github.com/streetwriters/gpui-webview"
+documentation = "https://github.com/streetwriters/gpui-webview"
 keywords = ["gpui", "webview", "wry", "wasm"]
 categories = ["gui"]
 # Incubating inside the spike workspace until a second project adopts it
@@ -183,3 +183,11 @@ windows = { version = "0.62", features = [
 ] }
 raw-window-handle = "0.6"
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# GPUI Kit's `gpui-pre` crates come from our fork (dma-buf imports, Linux fixes).
+[patch.crates-io]
+gpui-pre = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
+gpui-pre-macros = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
+gpui-pre-platform = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
+gpui-pre-sum-tree = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
+gpui-pre-web = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
