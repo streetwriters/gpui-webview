@@ -24,7 +24,10 @@
 //! * a strict clip's scripts do not run (the guarded strip stays its inline
 //!   colour) and its links: `https:` becomes `WebViewEvent::OpenExternal`,
 //!   `mailto:` produces no event at all;
-//! * a second `navigate` reuses the engine (no new `msedgewebview2` process);
+//! * a second `navigate` reuses the engine: the same `msedgewebview2` browser
+//!   process (by PID) before and after. The renderer, GPU and utility helpers
+//!   that WebView2 starts lazily are not counted, as their number depends on
+//!   timing;
 //! * teardown destroys the clip container and the WebView2 working set falls
 //!   back towards its pre-activation baseline.
 //!
@@ -88,7 +91,14 @@ mod windows_e2e {
     use windows::Win32::System::Power::{
         ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
     };
-    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::Threading::{
+        AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
+    };
     use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
@@ -505,7 +515,13 @@ mod windows_e2e {
             "windows e2e interaction",
         )
         .with_size(CLIP_WIDTH as u32, CLIP_HEIGHT as u32);
-        let before = webview2_processes();
+        let before = webview2_browser_processes();
+        if before.is_empty() {
+            failures.push(
+                "no msedgewebview2 browser process is a child of this test before the navigate"
+                    .into(),
+            );
+        }
         let navigated = webviews.borrow_mut().activate(0, interaction);
         match navigated {
             Err(error) => failures.push(format!("navigate: {error}")),
@@ -523,13 +539,18 @@ mod windows_e2e {
                          {other:?})"
                     )),
                 }
-                let after = webview2_processes();
-                if after > before {
+                // The browser process is the engine: a reused engine keeps
+                // the same one (same PID, none added). Its renderer and
+                // utility children come and go with timing, so they are not
+                // compared.
+                let after = webview2_browser_processes();
+                if after != before {
                     failures.push(format!(
-                        "navigate grew the WebView2 process tree: {before} -> {after}"
+                        "navigate replaced or added a WebView2 browser process: PIDs \
+                         {before:?} -> {after:?}"
                     ));
                 } else {
-                    println!("PASS engine reused: {before} -> {after} msedgewebview2 process(es)");
+                    println!("PASS engine reused: same msedgewebview2 browser process {after:?}");
                 }
 
                 // Scripts off: the script would paint the guard strip blue.
@@ -1195,27 +1216,45 @@ mod windows_e2e {
         unsafe { FindWindowW(w!("LockScreenBackstopFrame"), PCWSTR::null()).is_ok() }
     }
 
-    /// `msedgewebview2.exe` processes on the machine; the tree for our
-    /// environment counts too, but a reuse must not grow the total.
-    fn webview2_processes() -> usize {
-        let output = std::process::Command::new("tasklist")
-            .args([
-                "/FI",
-                "IMAGENAME eq msedgewebview2.exe",
-                "/FO",
-                "CSV",
-                "/NH",
-            ])
-            .output();
-        match output {
-            Ok(output) => String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .filter(|line| line.contains("msedgewebview2.exe"))
-                .count(),
-            // tasklist unavailable: make both counts equal so the check
-            // cannot fail spuriously.
-            Err(_) => usize::MAX,
+    /// PIDs (sorted) of the WebView2 browser processes this test started: the
+    /// `msedgewebview2.exe` processes whose parent is this process. WebView2
+    /// launches its browser process as a child of the host app; renderers, the
+    /// GPU process and utilities are children of that browser process, and
+    /// other apps' WebView2 trees hang off those apps, so neither is included.
+    /// Counting every `msedgewebview2.exe` instead flaked: helpers start
+    /// lazily (a renderer for the new document, a spare renderer) and other
+    /// apps on the runner start their own, so the total could grow while the
+    /// engine was reused. Empty when the snapshot fails.
+    fn webview2_browser_processes() -> Vec<u32> {
+        let this_process = unsafe { GetCurrentProcessId() };
+        let mut pids = Vec::new();
+        let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
+            return pids;
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut next = unsafe { Process32FirstW(snapshot, &mut entry) };
+        while next.is_ok() {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            if entry.th32ParentProcessID == this_process
+                && name.eq_ignore_ascii_case("msedgewebview2.exe")
+            {
+                pids.push(entry.th32ProcessID);
+            }
+            next = unsafe { Process32NextW(snapshot, &mut entry) };
         }
+        unsafe {
+            let _ = CloseHandle(snapshot);
+        }
+        pids.sort_unstable();
+        pids
     }
 
     /// The combined working set of every `msedgewebview2.exe` process, in
