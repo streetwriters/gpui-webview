@@ -152,7 +152,7 @@ gpui-kit = { version = "0.9.1", default-features = false, features = ["test-supp
 # code the app uses, and builds the compositor's feedback from the same
 # capability query. Linux-only (the test is).
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-gpui_wgpu = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
+gpui_wgpu = { git = "https://github.com/streetwriters/gpui-fast", rev = "c1ddb7b" }
 
 # The Windows E2E drives Win32 directly (GDI fallback readback, window and
 # process checks), Windows.Graphics.Capture (the composited-window proof),
@@ -185,9 +185,9 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 # GPUI Kit's `gpui-pre` crates come from our fork (dma-buf imports, Linux fixes).
 [patch.crates-io]
-gpui = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
-gpui-pre = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
-gpui-pre-macros = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
-gpui-pre-platform = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
-gpui-pre-sum-tree = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
-gpui-pre-web = { git = "https://github.com/streetwriters/gpui-fast", branch = "rn-gpui-linux" }
+gpui = { git = "https://github.com/streetwriters/gpui-fast", rev = "c1ddb7b" }
+gpui-pre = { git = "https://github.com/streetwriters/gpui-fast", rev = "c1ddb7b" }
+gpui-pre-macros = { git = "https://github.com/streetwriters/gpui-fast", rev = "c1ddb7b" }
+gpui-pre-platform = { git = "https://github.com/streetwriters/gpui-fast", rev = "c1ddb7b" }
+gpui-pre-sum-tree = { git = "https://github.com/streetwriters/gpui-fast", rev = "c1ddb7b" }
+gpui-pre-web = { git = "https://github.com/streetwriters/gpui-fast", rev = "c1ddb7b" }
